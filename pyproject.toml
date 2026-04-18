@@ -48,6 +48,7 @@ dev = [
 [project.scripts]
 mcp-picrawler = "mcp_picrawler.__main__:main"
 picrawler-voice = "voice_agent.agent:main"
+picrawler-text = "voice_agent.text_runner:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mcp_picrawler", "src/voice_agent"]

@@ -167,6 +167,8 @@ On the Pi the voice agent runs as a second systemd service (`picrawler-voice.ser
 
 Instructions given to the model steer it away from `snapshot` (returns an image it can't read over voice) toward `scan` / `caption` / `read_distance`. It narrates actions as it performs them.
 
+**Text-mode variant** (`picrawler-text`) — same Realtime session and tool-call plumbing, no audio. Useful when mic permissions aren't available (fresh macOS, SSH session, etc.). See [`docs/local-test.md`](docs/local-test.md) §3a.
+
 ## Auth
 
 Set `MCP_TOKEN` to require `Authorization: Bearer <token>` on the HTTP transport. Stdio sessions bypass this. This is a second layer — put the server on Tailscale or a LAN firewall anyway; don't expose port 8765 to the public internet.

@@ -43,7 +43,44 @@ Claude should invoke `read_distance`, `scan`, `move`, `snapshot` in sequence. `r
 
 If Claude complains about tool shapes or errors, that's a real bug to fix.
 
-## 3. Talking to Nigel (OpenAI Realtime)
+## 3a. Text-mode Nigel (no mic required)
+
+Use this when voice is blocked — first time on macOS (mic permission needs a terminal restart), or you're in a long-lived SSH/tmux session you can't kill. Exercises the full Realtime session, tool calls, and event loop through the real OpenAI API — just with text instead of audio.
+
+Two terminals. **Terminal 1** — the mock body:
+
+```bash
+cd /Users/guytp/code/chippy-tcg-poc/claude-bot
+MCP_TRANSPORT=streamable-http MCP_HOST=127.0.0.1 MCP_PORT=8765 \
+MCP_TOKEN=local-test PICRAWLER_MOCK_CAMERA=webcam \
+  .venv/bin/mcp-picrawler
+```
+
+**Terminal 2** — the brain, in text mode:
+
+```bash
+cd /Users/guytp/code/chippy-tcg-poc/claude-bot
+export OPENAI_API_KEY=sk-...
+MCP_URL=http://127.0.0.1:8765/mcp MCP_TOKEN=local-test \
+  .venv/bin/picrawler-text
+```
+
+Type prompts, hit enter. You'll see `[tool: scan({...})]` lines showing what MCP tools Nigel invokes, then his text response. Ctrl-D to exit.
+
+This catches nearly every bug voice mode would catch: session config shape, tool-call event dispatch, function_call_output round-trip, streaming text deltas. Costs about a cent per turn on `gpt-realtime`, or 1/10th that on `gpt-4o-mini-realtime-preview` (set `OPENAI_REALTIME_MODEL=gpt-4o-mini-realtime-preview`).
+
+### Live pytest suite
+
+Same pipeline, scripted as proper assertions:
+
+```bash
+OPENAI_API_KEY=sk-... RUN_LIVE_REALTIME=1 \
+  .venv/bin/pytest tests/test_realtime_live.py -v
+```
+
+Four tests, ~$0.02 total. Asserts the model actually invokes `read_distance`, `move`, `scan`/`caption` when asked. Good to run once before you ship to the Pi.
+
+## 3b. Voice mode Nigel (OpenAI Realtime)
 
 Two terminals. **Terminal 1** — the mock body:
 
