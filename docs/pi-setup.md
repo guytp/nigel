@@ -22,7 +22,7 @@ End-to-end path: blank SD card → assembled PiCrawler → Claude Code controlli
 1. Install Raspberry Pi Imager.
 2. Flash **Raspberry Pi OS (64-bit, Bookworm)**. Lite is fine — we don't need a desktop.
 3. Under "Advanced options" (gear icon):
-   - set hostname: `picrawler` (gives you `picrawler.local`)
+   - set hostname: `nigel` (gives you `nigel.local`)
    - enable SSH with your public key
    - set user: `pi` (matches the systemd unit — change both if you want something else)
    - set Wi-Fi
@@ -32,7 +32,7 @@ End-to-end path: blank SD card → assembled PiCrawler → Claude Code controlli
 ## 2. First SSH + install SunFounder base libraries
 
 ```bash
-ssh pi@picrawler.local
+ssh pi@nigel.local
 
 sudo apt update && sudo apt -y full-upgrade
 sudo apt -y install git python3-pip python3-venv python3-opencv libatlas-base-dev \
@@ -58,7 +58,7 @@ Reboot matters — I2C group perms and camera overlays only take effect after.
 ## 3. Validate the hardware stack in isolation
 
 ```bash
-ssh pi@picrawler.local
+ssh pi@nigel.local
 cd picrawler/examples
 sudo python3 0_calibration.py   # or whichever SunFounder calibration you used
 sudo python3 1_ready.py         # should stand
@@ -67,7 +67,7 @@ sudo python3 2_move.py          # should walk forward
 
 If these don't work, stop here and debug with SunFounder's docs — nothing we build on top will fix servo wiring.
 
-Camera check: `python3 -c "from vilib import Vilib; Vilib.camera_start(); Vilib.display(local=False, web=True); input()"` then browse to `http://picrawler.local:9000/mjpg`.
+Camera check: `python3 -c "from vilib import Vilib; Vilib.camera_start(); Vilib.display(local=False, web=True); input()"` then browse to `http://nigel.local:9000/mjpg`.
 
 ## 4. Install Nigel
 
@@ -96,7 +96,7 @@ journalctl -u picrawler-mcp -f
 # should see: "hardware backend: real"
 ```
 
-Open the MJPEG stream in a browser: `http://picrawler.local:9000/mjpg`. If vilib started, you see a live feed.
+Open the MJPEG stream in a browser: `http://nigel.local:9000/mjpg`. If vilib started, you see a live feed.
 
 ## 5. Connect Claude Code to it
 
@@ -107,7 +107,7 @@ On your dev machine, add to project `.mcp.json` (or `~/.claude.json`):
   "mcpServers": {
     "picrawler": {
       "type": "http",
-      "url": "http://picrawler.local:8765/mcp",
+      "url": "http://nigel.local:8765/mcp",
       "headers": {
         "Authorization": "Bearer PUT_THE_TOKEN_HERE"
       }
@@ -122,7 +122,7 @@ Restart Claude Code. The MCP server should show up in `/mcp` with 11 tools and 2
 
 Ask Claude to: `read distance`, then `scan`, then `move forward 1 step`, then `snapshot`. The snapshot should come back showing the world from the crawler's camera.
 
-If you want a human cockpit view while the agent drives: keep `http://picrawler.local:9000/mjpg` open in a browser tab.
+If you want a human cockpit view while the agent drives: keep `http://nigel.local:9000/mjpg` open in a browser tab.
 
 ## Troubleshooting
 

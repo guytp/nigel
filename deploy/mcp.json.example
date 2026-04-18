@@ -2,7 +2,7 @@
   "mcpServers": {
     "picrawler": {
       "type": "http",
-      "url": "http://picrawler.local:8765/mcp"
+      "url": "http://nigel.local:8765/mcp"
     }
   }
 }

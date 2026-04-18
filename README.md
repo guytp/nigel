@@ -52,7 +52,7 @@ After install, connect Claude Code by adding to `~/.claude.json` or project `.mc
   "mcpServers": {
     "picrawler": {
       "type": "http",
-      "url": "http://picrawler.local:8765/mcp",
+      "url": "http://nigel.local:8765/mcp",
       "headers": { "Authorization": "Bearer PUT_TOKEN_HERE" }
     }
   }
@@ -151,7 +151,7 @@ Add to your client:
   "mcpServers": {
     "picrawler": {
       "type": "http",
-      "url": "http://picrawler.local:8765/mcp"
+      "url": "http://nigel.local:8765/mcp"
     }
   }
 }
