@@ -52,10 +52,16 @@ say "bootstrap → repo=$REPO_URL  dir=$REPO_DIR  ref=$REF  reset=$RESET  skip_s
 
 say "installing apt prerequisites"
 sudo apt-get update
-sudo apt-get install -y \
-  git python3 python3-pip python3-venv python3-opencv \
-  libatlas-base-dev ffmpeg i2c-tools portaudio19-dev \
-  curl ca-certificates
+# libatlas-base-dev was needed on Bookworm for older numpy builds; Trixie
+# removed it and modern aarch64 numpy wheels self-contain their BLAS.
+# Install it opportunistically on Bookworm, skip silently on Trixie+.
+APT_PKGS="git python3 python3-pip python3-venv python3-opencv ffmpeg
+          i2c-tools portaudio19-dev curl ca-certificates"
+if apt-cache show libatlas-base-dev >/dev/null 2>&1; then
+  APT_PKGS="$APT_PKGS libatlas-base-dev"
+fi
+# shellcheck disable=SC2086
+sudo apt-get install -y $APT_PKGS
 
 # ---------------------------------------------------------------- sunfounder libs
 
