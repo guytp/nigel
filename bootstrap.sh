@@ -74,7 +74,8 @@ if [ "$SKIP_SF" != "1" ]; then
     mkdir -p "$SFDIR"
 
     if [ ! -d "$SFDIR/robot-hat" ]; then
-      git clone -b v4.0 https://github.com/sunfounder/robot-hat.git "$SFDIR/robot-hat"
+      # robot-hat's default branch IS v2.0; no v4.0 exists.
+      git clone -b v2.0 https://github.com/sunfounder/robot-hat.git "$SFDIR/robot-hat"
     fi
     (cd "$SFDIR/robot-hat" && sudo python3 setup.py install)
 
@@ -84,7 +85,8 @@ if [ "$SKIP_SF" != "1" ]; then
     (cd "$SFDIR/vilib" && sudo python3 install.py)
 
     if [ ! -d "$SFDIR/picrawler" ]; then
-      git clone -b v2.0 https://github.com/sunfounder/picrawler.git "$SFDIR/picrawler"
+      # picrawler ships on `main` (v2.1.x); no v2.0 tag.
+      git clone https://github.com/sunfounder/picrawler.git "$SFDIR/picrawler"
     fi
     (cd "$SFDIR/picrawler" && sudo python3 setup.py install)
 

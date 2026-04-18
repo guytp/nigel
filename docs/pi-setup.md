@@ -41,13 +41,13 @@ sudo apt -y install git python3-pip python3-venv python3-opencv libatlas-base-de
 # SunFounder's one-shot installer — brings in robot_hat, vilib, picrawler,
 # enables I2C/SPI, sets up audio routing.
 cd ~
-git clone https://github.com/sunfounder/robot-hat.git -b v4.0
+git clone https://github.com/sunfounder/robot-hat.git -b v2.0
 cd robot-hat && sudo python3 setup.py install && cd ~
 
 git clone https://github.com/sunfounder/vilib.git -b picamera2
 cd vilib && sudo python3 install.py && cd ~
 
-git clone https://github.com/sunfounder/picrawler.git -b v2.0
+git clone https://github.com/sunfounder/picrawler.git
 cd picrawler && sudo python3 setup.py install && cd ~
 
 sudo reboot

@@ -17,22 +17,32 @@ from typing import Protocol
 log = logging.getLogger(__name__)
 
 
+# Must stay in sync with the set picrawler.picrawler.MoveList exposes. See
+# https://github.com/sunfounder/picrawler/blob/main/picrawler/picrawler.py
 BUILTIN_ACTIONS: tuple[str, ...] = (
     "forward",
     "backward",
     "turn left",
     "turn right",
-    "sit",
+    "turn left angle",
+    "turn right angle",
     "stand",
+    "sit",
+    "ready",
+    "push up",
     "wave",
-    "twist",
-    "beckon",
-    "push-up",
+    "look left",
+    "look right",
     "look up",
     "look down",
+    "dance",
 )
 
-DETECTIONS: tuple[str, ...] = ("face", "color", "qr", "gesture", "object")
+# vilib detection toggles. "object" is intentionally omitted — vilib's object
+# detector requires a TFLite model + label set loaded via
+# object_detect_set_model()/set_labels() which we don't ship. Our Tier-C YOLO
+# stack provides object detection instead (see vision.VisionStack).
+DETECTIONS: tuple[str, ...] = ("face", "color", "qr", "gesture", "traffic")
 
 
 @dataclass
@@ -82,7 +92,7 @@ class MockHardware:
     def do_action(self, name: str, steps: int = 1, speed: int = 90) -> None:
         if name not in BUILTIN_ACTIONS:
             raise ValueError(f"unknown action: {name}")
-        log.info("mock do_action %s steps=%d speed=%d", name, steps, speed)
+        log.info("mock do_action %s step=%d speed=%d", name, steps, speed)
         self.state.last_action = name
         time.sleep(min(0.05 * steps, 0.5))
 
@@ -166,7 +176,13 @@ class MockHardware:
 
 
 class RealHardware:
-    """Wraps picrawler + robot_hat + vilib on the Pi."""
+    """Wraps picrawler + robot_hat + vilib on the Pi.
+
+    API shapes verified against:
+      picrawler  main  — picrawler/picrawler.py
+      robot-hat  v2.0  — robot_hat/modules.py (Ultrasonic), tts.py
+      vilib      picamera2 — vilib/vilib.py
+    """
 
     kind = "real"
 
@@ -177,11 +193,21 @@ class RealHardware:
 
         self._crawler = Picrawler()
         self._tts = TTS()
+        # Ultrasonic requires Pin-wrapped args; raw strings raise TypeError.
+        # D2=trig, D3=echo per picrawler/examples/avoid.py.
         self._ultrasonic = Ultrasonic(Pin("D2"), Pin("D3"))
         self._vilib = Vilib
         self._stream_host = stream_host
         self._stream_port = stream_port
         self.state = State()
+
+        # Enable the robot_hat speaker amplifier so TTS is audible.
+        try:
+            from robot_hat.utils import enable_speaker  # type: ignore[import-not-found]
+
+            enable_speaker()
+        except Exception as e:
+            log.warning("enable_speaker() failed (%s) — TTS may be silent", e)
 
         Vilib.camera_start(vflip=False, hflip=False)
         Vilib.display(local=False, web=True)
@@ -189,21 +215,36 @@ class RealHardware:
     def do_action(self, name: str, steps: int = 1, speed: int = 90) -> None:
         if name not in BUILTIN_ACTIONS:
             raise ValueError(f"unknown action: {name}")
-        self._crawler.do_action(name, steps, speed)
+        # picrawler uses `step=` (singular), not `steps=`.
+        self._crawler.do_action(name, step=steps, speed=speed)
         self.state.last_action = name
 
     def stop(self) -> None:
-        self._crawler.do_action("stand", 1, 80)
+        self._crawler.do_action("stand", step=1, speed=80)
         self.state.last_action = "stop"
 
     def read_distance_cm(self) -> float:
-        return float(self._ultrasonic.read())
+        # Ultrasonic.read() returns cm as float, or -1 on timeout, -2 on failure.
+        # Coalesce both sentinels to NaN-ish large value upstream consumers can filter.
+        raw = self._ultrasonic.read()
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return -1.0
+        if value < 0:
+            log.debug("ultrasonic returned sentinel %s (timeout/failure)", value)
+        return value
 
     def latest_frame_bgr(self):
+        import numpy as np
+
         frame = self._vilib.img
-        if frame is None:
+        # Vilib.img is initialised as a multiprocessing Manager list and gets
+        # reassigned to a numpy ndarray inside the camera loop. During the
+        # first ~100ms after camera_start() it may still be the Manager list.
+        if frame is None or not isinstance(frame, np.ndarray):
             raise RuntimeError("camera frame not ready")
-        return frame  # vilib already gives us BGR numpy
+        return frame  # picamera2 RGB888 buffer is BGR-ordered — no conversion
 
     def snapshot_jpeg(self) -> bytes:
         import cv2  # type: ignore[import-not-found]
@@ -215,43 +256,60 @@ class RealHardware:
         return buf.tobytes()
 
     def set_vision(self, feature: str, enabled: bool) -> None:
-        switch = {
-            "face": self._vilib.human_detect_switch,
-            "color": self._vilib.color_detect_switch,
-            "qr": self._vilib.qrcode_detect_switch,
-            "gesture": self._vilib.gesture_detect_switch,
-            "object": self._vilib.object_follow_switch,
-        }.get(feature)
-        if switch is None:
+        if feature not in DETECTIONS:
             raise ValueError(f"unknown detection: {feature}")
+
+        # Color is special: vilib's color_detect(name) both enables it AND
+        # sets the target. "close" (or close_color_detection()) disables.
+        if feature == "color":
+            if enabled:
+                target = self.state.target_color or "red"
+                self._vilib.color_detect(target)
+            else:
+                self._vilib.close_color_detection()
+            self.state.vision["color"] = enabled
+            return
+
+        switch = {
+            "face": self._vilib.face_detect_switch,
+            "qr": self._vilib.qrcode_detect_switch,
+            "gesture": self._vilib.hands_detect_switch,
+            "traffic": self._vilib.traffic_detect_switch,
+        }[feature]
         switch(enabled)
         self.state.vision[feature] = enabled
 
     def read_detections(self) -> list[Detection]:
+        params = self._vilib.detect_obj_parameter
         out: list[Detection] = []
         if self.state.vision.get("face"):
-            n = self._vilib.detect_obj_parameter.get("human_n", 0)
-            out.append(Detection("face", {"n": n}))
+            out.append(Detection("face", {"n": params.get("human_n", 0)}))
         if self.state.vision.get("color"):
             out.append(
                 Detection(
                     "color",
                     {
-                        "n": self._vilib.detect_obj_parameter.get("color_n", 0),
-                        "x": self._vilib.detect_obj_parameter.get("color_x", 0),
-                        "y": self._vilib.detect_obj_parameter.get("color_y", 0),
+                        "n": params.get("color_n", 0),
+                        "x": params.get("color_x", 0),
+                        "y": params.get("color_y", 0),
                     },
                 )
             )
         if self.state.vision.get("qr"):
-            out.append(
-                Detection("qr", {"data": self._vilib.detect_obj_parameter.get("qr_data", "")})
-            )
+            out.append(Detection("qr", {"data": params.get("qr_data", "")}))
+        if self.state.vision.get("gesture"):
+            # hands_joints is a list when hands are visible
+            joints = params.get("hands_joints", []) or []
+            out.append(Detection("gesture", {"n": len(joints)}))
         return out
 
     def set_target_color(self, color: str) -> None:
-        self._vilib.detect_color_name(color)
+        # No separate "set colour name" API — color_detect(name) is the setter.
+        # Only call it if color detection is currently enabled, otherwise we'd
+        # implicitly enable it here.
         self.state.target_color = color
+        if self.state.vision.get("color"):
+            self._vilib.color_detect(color)
 
     def speak(self, text: str) -> None:
         self._tts.say(text)
