@@ -59,3 +59,8 @@ target-version = "py310"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+filterwarnings = [
+    # mcp SDK is nudging us toward streamable_http_client (different signature).
+    # Suppress until we migrate — see voice_agent/mcp_bridge.py comment.
+    "ignore:Use `streamable_http_client` instead.:DeprecationWarning",
+]

@@ -12,6 +12,9 @@ import logging
 from types import TracebackType
 
 from mcp import ClientSession
+# Using the legacy name that accepts `headers=` directly. The newer
+# streamable_http_client takes a pre-built httpx.AsyncClient; revisit when we
+# can justify plumbing that through.
 from mcp.client.streamable_http import streamablehttp_client
 
 log = logging.getLogger(__name__)

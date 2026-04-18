@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import random
 import time
 from dataclasses import dataclass, field
@@ -65,12 +66,18 @@ class Hardware(Protocol):
 
 
 class MockHardware:
-    """Runs on any machine. Logs commands and synthesises sensor output."""
+    """Runs on any machine. Logs commands and synthesises sensor output.
+
+    Set PICRAWLER_MOCK_CAMERA=webcam to pull frames from the default webcam
+    (useful for Tier-C testing of the vision stack before the Pi arrives).
+    Falls back to synthetic frames if the webcam can't open.
+    """
 
     kind = "mock"
 
     def __init__(self) -> None:
         self.state = State()
+        self._webcam = None  # None=untried, False=failed, VideoCapture=open
 
     def do_action(self, name: str, steps: int = 1, speed: int = 90) -> None:
         if name not in BUILTIN_ACTIONS:
@@ -87,6 +94,31 @@ class MockHardware:
         return round(random.uniform(15.0, 120.0), 1)
 
     def latest_frame_bgr(self):
+        if os.environ.get("PICRAWLER_MOCK_CAMERA", "").lower() == "webcam":
+            frame = self._webcam_frame_bgr()
+            if frame is not None:
+                return frame
+        return self._synthetic_frame_bgr()
+
+    def _webcam_frame_bgr(self):
+        """Pull a frame from the default webcam, downscaled to PiCrawler resolution."""
+        if self._webcam is False:
+            return None
+        import cv2
+
+        if self._webcam is None:
+            cap = cv2.VideoCapture(0)
+            if not cap.isOpened():
+                log.warning("PICRAWLER_MOCK_CAMERA=webcam but device 0 did not open")
+                self._webcam = False
+                return None
+            self._webcam = cap
+        ok, frame = self._webcam.read()
+        if not ok or frame is None:
+            return None
+        return cv2.resize(frame, (320, 240))
+
+    def _synthetic_frame_bgr(self):
         import numpy as np
         from PIL import Image, ImageDraw
 

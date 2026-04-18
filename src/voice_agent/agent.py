@@ -12,8 +12,17 @@ Control flow:
         └── main: async for event in session:
                 - response.audio.delta        → enqueue to speaker
                 - speech_started              → flush speaker (barge-in)
-                - function_call_arguments.done → call MCP tool → function_call_output → response.create
+                - response.output_item.done   → if item is a function_call,
+                                                 call MCP tool →
+                                                 function_call_output →
+                                                 response.create
                 - error                       → log
+
+Note: we listen to `response.output_item.done` rather than
+`response.function_call_arguments.done` because the latter lacks the function
+*name* — it only carries call_id and arguments. The output_item.done event
+bundles the fully materialised function-call item with `name`, `call_id`, and
+`arguments` together.
 
 Server-side VAD handles turn detection — no wake word, no push-to-talk. User
 speaks, model responds, user interrupts mid-sentence, model shuts up. All in
@@ -117,8 +126,10 @@ async def _run() -> int:
                             audio.enqueue_output(base64.b64decode(event.delta))
                         elif et == "input_audio_buffer.speech_started":
                             audio.flush_output()  # barge-in
-                        elif et == "response.function_call_arguments.done":
-                            await _handle_tool_call(conn, bridge, event)
+                        elif et == "response.output_item.done":
+                            item = getattr(event, "item", None)
+                            if item is not None and getattr(item, "type", None) == "function_call":
+                                await _handle_tool_call(conn, bridge, item)
                         elif et == "response.done":
                             log.debug("response.done")
                         elif et == "error":
@@ -137,10 +148,15 @@ async def _run() -> int:
     return 0
 
 
-async def _handle_tool_call(conn, bridge: CrawlerMCPBridge, event) -> None:
-    name = getattr(event, "name", None)
-    call_id = getattr(event, "call_id", None)
-    raw_args = getattr(event, "arguments", "") or "{}"
+async def _handle_tool_call(conn, bridge: CrawlerMCPBridge, item) -> None:
+    """Dispatch a completed function-call conversation item to the MCP bridge.
+
+    `item` is a ConversationItem with type="function_call" (from
+    response.output_item.done). It carries name, call_id, and final arguments.
+    """
+    name = getattr(item, "name", None)
+    call_id = getattr(item, "call_id", None)
+    raw_args = getattr(item, "arguments", "") or "{}"
     try:
         args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
     except json.JSONDecodeError:
