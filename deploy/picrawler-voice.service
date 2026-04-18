@@ -6,12 +6,12 @@ Requires=picrawler-mcp.service
 [Service]
 Type=simple
 User=pi
-WorkingDirectory=/home/pi/claude-bot
+WorkingDirectory=/home/pi/nigel
 # OPENAI_API_KEY, MCP_TOKEN, etc. live in this file (chmod 600):
 EnvironmentFile=/etc/picrawler-voice.env
 Environment=MCP_URL=http://127.0.0.1:8765/mcp
 Environment=VOICE_LOG=INFO
-ExecStart=/home/pi/claude-bot/.venv/bin/picrawler-voice
+ExecStart=/home/pi/nigel/.venv/bin/picrawler-voice
 Restart=on-failure
 RestartSec=5
 

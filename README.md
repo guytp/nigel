@@ -1,9 +1,65 @@
-# claude-bot — PiCrawler MCP server + voice agent
+# Nigel
 
-Two processes that give an LLM a body on a [SunFounder PiCrawler](https://www.sunfounder.com/products/picrawler-robot-kit):
+A body for your LLM, shaped like a small quadruped spider — the [SunFounder PiCrawler](https://www.sunfounder.com/products/picrawler-robot-kit). Two brains can drive Nigel interchangeably:
 
-- `mcp_picrawler` — MCP server wrapping movement, camera, vision, and speech. Drives the body. Used by Claude Code.
-- `voice_agent` — OpenAI Realtime client that connects to the MCP server locally and gives the crawler a voice. Same body, different brain.
+- `mcp_picrawler` — MCP server wrapping movement, camera, tiered vision, and speech. Used by Claude Code.
+- `voice_agent` — OpenAI Realtime client that connects to the MCP server locally and gives Nigel a voice. Same body, different brain.
+
+Run one or both. They share the same tool surface.
+
+## Install on a Pi (one-liner)
+
+On a freshly-flashed Raspberry Pi OS (64-bit, Bookworm) with the crawler assembled:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/guytp/nigel/main/bootstrap.sh | bash
+```
+
+Inspect-first variant (recommended first time):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/guytp/nigel/main/bootstrap.sh -o /tmp/bootstrap.sh
+less /tmp/bootstrap.sh
+bash /tmp/bootstrap.sh
+```
+
+What it does:
+
+1. Installs apt prerequisites.
+2. Clones + builds the SunFounder libraries (`robot-hat`, `vilib`, `picrawler`) if not already present — skip with `SKIP_SF=1`.
+3. Clones this repo to `/home/pi/nigel`.
+4. Sets up a venv and installs the `mcp_picrawler` package.
+5. Drops the systemd unit, enables + starts `picrawler-mcp.service`.
+6. If `/etc/picrawler-voice.env` exists, also installs and starts `picrawler-voice.service`.
+
+The script is idempotent — running it again updates code and restarts services. To wipe and reinstall:
+
+```bash
+RESET=1 bash /tmp/bootstrap.sh
+```
+
+To uninstall:
+
+```bash
+cd /home/pi/nigel && ./deploy/uninstall.sh           # remove services + venv
+cd /home/pi/nigel && ./deploy/uninstall.sh --purge   # also remove /etc/picrawler-*.env
+```
+
+After install, connect Claude Code by adding to `~/.claude.json` or project `.mcp.json`:
+
+```jsonc
+{
+  "mcpServers": {
+    "picrawler": {
+      "type": "http",
+      "url": "http://picrawler.local:8765/mcp",
+      "headers": { "Authorization": "Bearer PUT_TOKEN_HERE" }
+    }
+  }
+}
+```
+
+Full manual walkthrough, hardware calibration notes, and troubleshooting live in [`docs/pi-setup.md`](docs/pi-setup.md).
 
 ## What it does
 
@@ -68,8 +124,8 @@ Wire it into Claude Code:
 
 ```bash
 # on the Pi
-git clone <this repo> /home/pi/claude-bot
-cd /home/pi/claude-bot
+git clone https://github.com/guytp/nigel.git /home/pi/nigel
+cd /home/pi/nigel
 ./deploy/install.sh
 ```
 

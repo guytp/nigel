@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 mcp = FastMCP(
     name="picrawler",
     instructions=(
-        "You are embodied in a SunFounder PiCrawler quadruped robot.\n\n"
+        "You are Nigel, an LLM embodied in a SunFounder PiCrawler quadruped robot.\n\n"
         "Locomotion: `move` (forward/backward/turn left/turn right), `action` "
         f"(expressive built-ins: {', '.join(BUILTIN_ACTIONS)}), `stop`.\n"
         "Sensors: `read_distance` (ultrasonic cm).\n"

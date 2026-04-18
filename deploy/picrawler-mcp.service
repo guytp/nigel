@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=pi
-WorkingDirectory=/home/pi/claude-bot
+WorkingDirectory=/home/pi/nigel
 Environment=MCP_TRANSPORT=streamable-http
 Environment=MCP_HOST=0.0.0.0
 Environment=MCP_PORT=8765
@@ -14,7 +14,7 @@ Environment=PICRAWLER_LOG=INFO
 # Set MCP_TOKEN to require `Authorization: Bearer <token>` on every request.
 # Generate once with: openssl rand -hex 32
 EnvironmentFile=-/etc/picrawler-mcp.env
-ExecStart=/home/pi/claude-bot/.venv/bin/mcp-picrawler
+ExecStart=/home/pi/nigel/.venv/bin/mcp-picrawler
 Restart=on-failure
 RestartSec=3
 

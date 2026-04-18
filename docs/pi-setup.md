@@ -2,6 +2,12 @@
 
 End-to-end path: blank SD card → assembled PiCrawler → Claude Code controlling the robot through the MCP server. Budget about an hour if the hardware is already built.
 
+> **Shortcut:** after flashing and SSH'ing in, you can skip most of steps 2 and 4 by running the one-liner from the main README:
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/guytp/nigel/main/bootstrap.sh | bash
+> ```
+> This doc remains as the canonical reference and for troubleshooting.
+
 ## 0. Hardware checklist
 
 - SunFounder PiCrawler, assembled and calibrated per SunFounder's own docs
@@ -63,12 +69,12 @@ If these don't work, stop here and debug with SunFounder's docs — nothing we b
 
 Camera check: `python3 -c "from vilib import Vilib; Vilib.camera_start(); Vilib.display(local=False, web=True); input()"` then browse to `http://picrawler.local:9000/mjpg`.
 
-## 4. Install claude-bot
+## 4. Install Nigel
 
 ```bash
 cd ~
-git clone <your fork / git URL> claude-bot
-cd claude-bot
+git clone https://github.com/guytp/nigel.git
+cd nigel
 
 # Optional: lock in an auth token before the service goes live
 sudo tee /etc/picrawler-mcp.env > /dev/null <<EOF
