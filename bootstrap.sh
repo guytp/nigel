@@ -52,10 +52,11 @@ say "bootstrap → repo=$REPO_URL  dir=$REPO_DIR  ref=$REF  reset=$RESET  skip_s
 
 say "installing apt prerequisites"
 sudo apt-get update
-# libatlas-base-dev was needed on Bookworm for older numpy source-builds.
-# Modern aarch64 numpy wheels bundle their own BLAS; Trixie removed the
-# package entirely. We don't need it on either.
-sudo apt-get install -y \
+# --no-install-recommends matters on Trixie: python3-opencv's Recommends
+# chain pulls in libatlas-base-dev which was retired, and apt fails the
+# whole batch when a Recommends has no installation candidate. Our package
+# set doesn't need any of the recommended extras anyway.
+sudo apt-get install -y --no-install-recommends \
   git python3 python3-pip python3-venv python3-opencv ffmpeg \
   i2c-tools portaudio19-dev curl ca-certificates
 
