@@ -127,7 +127,7 @@ def test_latest_frame_bgr_raises_when_not_ready(real_hw):
     hw, _, _, vilib_mod = real_hw
     vilib_mod.Vilib.img = None
     with pytest.raises(RuntimeError, match="camera frame not ready"):
-        hw.latest_frame_bgr()
+        hw.latest_frame_bgr(retry_budget_s=0)
 
 
 def test_latest_frame_bgr_rejects_manager_list_sentinel(real_hw):
@@ -135,7 +135,29 @@ def test_latest_frame_bgr_rejects_manager_list_sentinel(real_hw):
     hw, _, _, vilib_mod = real_hw
     vilib_mod.Vilib.img = [1, 2, 3]  # list, not ndarray → not ready yet
     with pytest.raises(RuntimeError, match="camera frame not ready"):
-        hw.latest_frame_bgr()
+        hw.latest_frame_bgr(retry_budget_s=0)
+
+
+def test_latest_frame_bgr_polls_until_ready(real_hw):
+    """Simulate the race: list until a deadline, then ndarray."""
+    import numpy as np
+
+    hw, _, _, vilib_mod = real_hw
+    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    call_count = {"n": 0}
+
+    # property getter swaps to a real ndarray on the 3rd access
+    def img_getter(self):
+        call_count["n"] += 1
+        return [1, 2, 3] if call_count["n"] < 3 else frame
+
+    type(vilib_mod.Vilib).img = property(img_getter)
+    try:
+        got = hw.latest_frame_bgr(retry_budget_s=2.0)
+        assert got is frame
+        assert call_count["n"] >= 3
+    finally:
+        del type(vilib_mod.Vilib).img
 
 
 def test_latest_frame_bgr_returns_ndarray(real_hw):

@@ -40,7 +40,7 @@ mcp = FastMCP(
 
 hw = get_hardware()
 vision = VisionStack(
-    yolo_model=os.environ.get("PICRAWLER_YOLO_MODEL", "models/yolov8n.pt"),
+    yolo_model=os.environ.get("PICRAWLER_YOLO_MODEL", "yolov8n.pt"),
     caption_model=os.environ.get("PICRAWLER_CAPTION_MODEL", "vikhyatk/moondream2"),
 )
 log.info("hardware backend: %s", hw.kind)

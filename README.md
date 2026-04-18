@@ -61,6 +61,19 @@ After install, connect Claude Code by adding to `~/.claude.json` or project `.mc
 
 Full manual walkthrough, hardware calibration notes, and troubleshooting live in [`docs/pi-setup.md`](docs/pi-setup.md).
 
+### Smoke test after install
+
+Once the bootstrap finishes (reboot first if it said one was needed), run the self-test:
+
+```bash
+sudo systemctl stop picrawler-mcp            # free the camera
+cd /home/pi/nigel
+.venv/bin/python -m scripts.smoke
+sudo systemctl start picrawler-mcp
+```
+
+It exercises every subsystem — servos, ultrasonic, camera, JPEG encode, MJPEG stream, vision toggles, TTS, YOLO — and prints pass/fail per item. If it passes, Claude Code and the voice agent will work. If a step fails, the line tells you what to fix.
+
 ## What it does
 
 - Exposes movement, camera, sensor, and speech as MCP tools

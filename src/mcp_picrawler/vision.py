@@ -53,7 +53,11 @@ class ScanResult:
         }
 
 
-DEFAULT_YOLO_PATH = "models/yolov8n.pt"
+# Bare filename so ultralytics auto-downloads and caches it — passing a
+# prefixed path (e.g. "models/yolov8n.pt") doesn't survive service restart:
+# ultralytics writes the download to CWD as `yolov8n.pt`, then on restart
+# can't find it at the prefixed path and re-downloads.
+DEFAULT_YOLO_PATH = "yolov8n.pt"
 
 
 class VisionStack:

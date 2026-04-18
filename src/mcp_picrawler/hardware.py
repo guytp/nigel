@@ -235,16 +235,26 @@ class RealHardware:
             log.debug("ultrasonic returned sentinel %s (timeout/failure)", value)
         return value
 
-    def latest_frame_bgr(self):
+    def latest_frame_bgr(self, retry_budget_s: float = 3.0):
+        """Return the latest camera frame as a numpy BGR array.
+
+        Vilib.img is a multiprocessing Manager().list() until the camera loop
+        reassigns it to a real ndarray. We poll briefly so the first call
+        after service boot works instead of hard-failing.
+        """
         import numpy as np
 
-        frame = self._vilib.img
-        # Vilib.img is initialised as a multiprocessing Manager list and gets
-        # reassigned to a numpy ndarray inside the camera loop. During the
-        # first ~100ms after camera_start() it may still be the Manager list.
-        if frame is None or not isinstance(frame, np.ndarray):
-            raise RuntimeError("camera frame not ready")
-        return frame  # picamera2 RGB888 buffer is BGR-ordered — no conversion
+        deadline = time.monotonic() + retry_budget_s
+        while True:
+            frame = self._vilib.img
+            if frame is not None and isinstance(frame, np.ndarray):
+                return frame  # picamera2 RGB888 buffer is BGR-ordered
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"camera frame not ready after {retry_budget_s}s — "
+                    "check CSI cable, vilib logs, and that camera_start() completed"
+                )
+            time.sleep(0.1)
 
     def snapshot_jpeg(self) -> bytes:
         import cv2  # type: ignore[import-not-found]

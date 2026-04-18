@@ -152,3 +152,16 @@ cat <<EOF
     cd $REPO_DIR && ./deploy/uninstall.sh
 
 EOF
+
+# --------------------------------------------------------- first-boot hints
+if python3 -c "import picrawler, robot_hat, vilib" 2>/dev/null; then
+  say "smoke test (sanity-check the hardware)"
+  echo "  Stop the service first so we can open the camera:"
+  echo "    sudo systemctl stop picrawler-mcp"
+  echo "    cd $REPO_DIR && .venv/bin/python -m scripts.smoke"
+  echo "    sudo systemctl start picrawler-mcp"
+else
+  warn "SunFounder libs not importable by python3 yet — a reboot is likely required"
+  warn "  sudo reboot"
+  warn "  after reboot, re-run this bootstrap OR just: sudo systemctl restart picrawler-mcp"
+fi

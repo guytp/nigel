@@ -19,11 +19,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-pi = [
-    "picrawler",
-    "robot-hat",
-    "vilib",
-]
+# picrawler/robot-hat/vilib are NOT on PyPI in any useful state — picrawler
+# isn't published at all, vilib only has an ancient v1.0.0 stub, and we need
+# the `picamera2` branch of vilib specifically. They're installed globally
+# on the Pi via bootstrap.sh (sudo python3 setup.py install) and the service
+# venv sees them through `--system-site-packages`. Do NOT list them here.
 vision = [
     "ultralytics>=8.2",
 ]
@@ -52,6 +52,11 @@ picrawler-text = "voice_agent.text_runner:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mcp_picrawler", "src/voice_agent"]
+
+# Include the top-level scripts/ package so `python -m scripts.smoke` works
+# from an installed venv as well as a dev checkout.
+[tool.hatch.build.targets.wheel.sources]
+"scripts" = "scripts"
 
 [tool.ruff]
 line-length = 100

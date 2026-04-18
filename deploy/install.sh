@@ -54,8 +54,10 @@ say "upgrading pip + installing nigel"
 source .venv/bin/activate
 pip install --upgrade pip wheel
 
-# Always install body + vision. Add voice only if the env file exists.
-EXTRAS="pi,vision"
+# SunFounder libs (picrawler/robot_hat/vilib) are NOT installed via pip —
+# they come from bootstrap.sh (sudo python3 setup.py install) and the venv
+# sees them via --system-site-packages. Do not add them here.
+EXTRAS="vision"
 if [ -f /etc/picrawler-voice.env ]; then
   EXTRAS="${EXTRAS},voice"
   say "voice env file detected — including voice extras"
