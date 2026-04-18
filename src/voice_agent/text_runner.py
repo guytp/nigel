@@ -82,7 +82,7 @@ async def run_prompts(
             await conn.response.create()
             try:
                 await asyncio.wait_for(
-                    _consume_one_turn(conn, bridge, turn),
+                    _consume_one_turn(conn, bridge, turn, pending=1),
                     timeout=timeout_per_turn,
                 )
             except asyncio.TimeoutError:
@@ -92,32 +92,38 @@ async def run_prompts(
     return logs
 
 
-async def _consume_one_turn(conn, bridge: CrawlerMCPBridge, turn: TurnLog) -> None:
-    """Drain events for one prompt until we see a response.done at the top level.
+async def _consume_one_turn(
+    conn,
+    bridge: CrawlerMCPBridge,
+    turn: TurnLog,
+    pending: int = 1,
+) -> None:
+    """Drain events for one prompt until every outstanding response has closed.
 
-    A turn may contain multiple tool calls → sub-responses. We count:
-      opened = number of response.created events seen
-      closed = number of response.done events seen
-    The turn ends when opened == closed and opened >= 1.
+    A tool-calling turn produces MULTIPLE responses from the server:
+      1. response.created → function_call item → response.done
+      2. we send function_call_output + response.create
+      3. response.created → text deltas → response.done
+
+    `pending` tracks how many response.done events we're still expecting.
+    Caller sets pending=1 for the initial response.create it issued; each
+    tool dispatch increments it (since dispatch triggers another
+    response.create). We return when pending drops to 0.
     """
-    opened = 0
-    closed = 0
     async for event in conn:
         et = getattr(event, "type", None)
-        if et == "response.created":
-            opened += 1
-        elif et == "response.text.delta":
+        if et == "response.text.delta":
             turn.text += getattr(event, "delta", "") or ""
         elif et == "response.audio_transcript.delta":
-            # model may emit transcript deltas even in text mode — ignore
-            pass
+            pass  # model may emit these even in text-only mode; harmless
         elif et == "response.output_item.done":
             item = getattr(event, "item", None)
             if item is not None and getattr(item, "type", None) == "function_call":
                 await _dispatch_tool(conn, bridge, item, turn)
+                pending += 1  # we just triggered another response
         elif et == "response.done":
-            closed += 1
-            if opened >= 1 and opened == closed:
+            pending -= 1
+            if pending <= 0:
                 return
         elif et == "error":
             err = getattr(event, "error", event)
@@ -189,7 +195,7 @@ async def interactive(
                 }
             )
             await conn.response.create()
-            await _consume_one_turn(conn, bridge, turn)
+            await _consume_one_turn(conn, bridge, turn, pending=1)
             if turn.tool_calls:
                 for name, args in turn.tool_calls:
                     print(f"  [tool: {name}({args})]", file=sys.stderr)
