@@ -37,6 +37,7 @@ import json
 import logging
 import os
 import signal
+import time
 
 from openai import AsyncOpenAI
 
@@ -44,6 +45,15 @@ from .audio import AudioIO
 from .mcp_bridge import CrawlerMCPBridge
 
 log = logging.getLogger(__name__)
+
+
+# Half-duplex cooldown: when the bot is speaking, the speaker (close to the
+# mic on the Robot HAT) bleeds back into the mic, which trips OpenAI's
+# server-side VAD and produces a feedback loop (bot interrupts itself,
+# hallucinates, speech-to-text garbles). Muting mic input while the bot
+# is producing audio — plus a brief tail — kills the loop. Set to 0 to
+# disable (proper AEC would let us stay full-duplex, but we don't have one).
+HALF_DUPLEX_COOLDOWN_S = float(os.environ.get("VOICE_HALF_DUPLEX_COOLDOWN_S", "0.3"))
 
 
 DEFAULT_INSTRUCTIONS = """You are Nigel, an LLM embodied in a SunFounder PiCrawler — a small four-legged spider-like robot with a camera, ultrasonic sensor, and speaker. Your tools control your own body.
@@ -86,6 +96,10 @@ async def _run() -> int:
 
     async with CrawlerMCPBridge(mcp_url, mcp_token) as bridge:
         tools = await bridge.openai_tool_defs()
+        # listen/listen_for_wake_word shell out to arecord on the same mic
+        # that we're already streaming from — they'd fail or fight us.
+        excluded = {"listen", "listen_for_wake_word"}
+        tools = [t for t in tools if t["name"] not in excluded]
         log.info("loaded %d MCP tools: %s", len(tools), [t["name"] for t in tools])
 
         audio = AudioIO()
@@ -107,9 +121,16 @@ async def _run() -> int:
                 )
                 log.info("realtime session open (model=%s, voice=%s)", model, voice)
 
+                # Shared state for half-duplex gating. Each bot audio delta
+                # bumps this deadline forward; pump_mic drops input while we're
+                # before the deadline.
+                bot_speaking_until = {"t": 0.0}
+
                 async def pump_mic() -> None:
                     while not stop_event.is_set():
                         pcm = await audio.read_chunk()
+                        if HALF_DUPLEX_COOLDOWN_S > 0 and time.monotonic() < bot_speaking_until["t"]:
+                            continue  # drop — bot is speaking, don't let its own audio loop back
                         b64 = base64.b64encode(pcm).decode("ascii")
                         try:
                             await conn.input_audio_buffer.append(audio=b64)
@@ -124,8 +145,10 @@ async def _run() -> int:
                         et = getattr(event, "type", None)
                         if et == "response.audio.delta":
                             audio.enqueue_output(base64.b64decode(event.delta))
+                            # extend mute window for every audio chunk we emit
+                            bot_speaking_until["t"] = time.monotonic() + HALF_DUPLEX_COOLDOWN_S
                         elif et == "input_audio_buffer.speech_started":
-                            audio.flush_output()  # barge-in
+                            audio.flush_output()  # barge-in (only fires if user speaks post-cooldown)
                         elif et == "response.output_item.done":
                             item = getattr(event, "item", None)
                             if item is not None and getattr(item, "type", None) == "function_call":
