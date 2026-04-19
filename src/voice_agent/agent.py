@@ -41,7 +41,7 @@ import time
 
 from openai import AsyncOpenAI
 
-from .audio import AudioIO
+from .audio import AudioIO, rms_int16
 from .mcp_bridge import CrawlerMCPBridge
 
 log = logging.getLogger(__name__)
@@ -56,6 +56,15 @@ log = logging.getLogger(__name__)
 HALF_DUPLEX_COOLDOWN_S = float(os.environ.get("VOICE_HALF_DUPLEX_COOLDOWN_S", "0.8"))
 VAD_THRESHOLD = float(os.environ.get("VOICE_VAD_THRESHOLD", "0.6"))
 VAD_SILENCE_MS = int(os.environ.get("VOICE_VAD_SILENCE_MS", "600"))
+
+# Local RMS noise gate. Chunks below this (post-gain, on the 24kHz stream we
+# send to OpenAI) are dropped. Prevents OpenAI's server VAD from tripping on
+# silence / room noise / echo tail. Typical values:
+#   0      = disabled
+#   2000   = aggressive (drops quiet speech too)
+#   1000   = balanced
+#   500    = permissive (lets more through)
+NOISE_GATE_RMS = float(os.environ.get("VOICE_NOISE_GATE_RMS", "1000"))
 
 
 DEFAULT_INSTRUCTIONS = """You are Nigel, an LLM embodied in a SunFounder PiCrawler — a small four-legged spider-like robot with a camera, ultrasonic sensor, and speaker. Your tools control your own body.
@@ -149,6 +158,10 @@ async def _run() -> int:
                             audio.flush_input()
                             was_muted["v"] = False
                             continue  # drop the current chunk too; it may be tail
+                        # Noise gate: drop quiet chunks so OpenAI's server VAD
+                        # isn't tickled by ambient noise or echo bleed-through.
+                        if NOISE_GATE_RMS > 0 and rms_int16(pcm) < NOISE_GATE_RMS:
+                            continue
                         b64 = base64.b64encode(pcm).decode("ascii")
                         try:
                             await conn.input_audio_buffer.append(audio=b64)

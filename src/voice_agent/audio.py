@@ -28,6 +28,7 @@ BLOCK_MS = 40
 
 HW_INPUT_RATE = int(os.environ.get("VOICE_HW_INPUT_RATE", "48000"))
 HW_OUTPUT_RATE = int(os.environ.get("VOICE_HW_OUTPUT_RATE", "48000"))
+MIC_GAIN_DB = float(os.environ.get("VOICE_MIC_GAIN_DB", "20"))
 
 _DEFAULT_INPUT_DEVICE: str | int | None = os.environ.get("VOICE_INPUT_DEVICE")
 _DEFAULT_OUTPUT_DEVICE: str | int | None = os.environ.get("VOICE_OUTPUT_DEVICE")
@@ -40,6 +41,31 @@ def _coerce_device(val):
         return int(val)
     except (TypeError, ValueError):
         return val  # fall back to device-name string
+
+
+def rms_int16(pcm: bytes) -> float:
+    """Root-mean-square amplitude of a PCM16 byte buffer. Silence ≈ 0,
+    normal speech ≈ 2000-8000, loud speech 10000+ (out of 32768)."""
+    if not pcm:
+        return 0.0
+    import numpy as np
+
+    samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
+    if samples.size == 0:
+        return 0.0
+    return float(np.sqrt((samples * samples).mean()))
+
+
+def apply_gain_int16(pcm: bytes, gain_db: float) -> bytes:
+    """Amplify a PCM16 buffer by `gain_db` dB with hard clipping at int16 range."""
+    if gain_db == 0 or not pcm:
+        return pcm
+    import numpy as np
+
+    factor = 10.0 ** (gain_db / 20.0)
+    samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) * factor
+    samples = np.clip(samples, -32768, 32767).astype(np.int16)
+    return samples.tobytes()
 
 
 def _resample_int16(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
@@ -78,11 +104,13 @@ class AudioIO:
         output_device=None,
         hw_input_rate: int | None = None,
         hw_output_rate: int | None = None,
+        mic_gain_db: float | None = None,
     ) -> None:
         self._input_device = _coerce_device(input_device if input_device is not None else _DEFAULT_INPUT_DEVICE)
         self._output_device = _coerce_device(output_device if output_device is not None else _DEFAULT_OUTPUT_DEVICE)
         self._hw_in_rate = hw_input_rate or HW_INPUT_RATE
         self._hw_out_rate = hw_output_rate or HW_OUTPUT_RATE
+        self._mic_gain_db = mic_gain_db if mic_gain_db is not None else MIC_GAIN_DB
         self._in_q: queue.Queue[bytes] = queue.Queue(maxsize=50)
         self._out_buf = bytearray()
         self._out_lock = threading.Lock()
@@ -153,8 +181,9 @@ class AudioIO:
         self._out_stream = None
 
     async def read_chunk(self) -> bytes:
-        """Pop one block of mic PCM, resampled to OpenAI's 24kHz."""
+        """Pop one block of mic PCM, gain-boost, resample to 24kHz for OpenAI."""
         hw_pcm = await asyncio.to_thread(self._in_q.get)
+        hw_pcm = apply_gain_int16(hw_pcm, self._mic_gain_db)
         return _resample_int16(hw_pcm, self._hw_in_rate, OPENAI_RATE)
 
     def enqueue_output(self, pcm24k_bytes: bytes) -> None:
