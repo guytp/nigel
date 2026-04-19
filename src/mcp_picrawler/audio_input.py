@@ -42,23 +42,34 @@ def record_wav(seconds: float, device: str | None = None, gain_db: float | None 
     raw = Path(tempfile.mkstemp(suffix=".wav")[1])
     boosted = Path(tempfile.mkstemp(suffix=".wav")[1])
     try:
-        subprocess.run(
-            [
-                "arecord", "-q", "-D", device,
-                "-f", "S16_LE", "-r", "16000", "-c", "1",
-                "-d", str(seconds), str(raw),
-            ],
-            check=True,
-            capture_output=True,
-            timeout=seconds + 5,
-        )
+        # arecord's -d takes an integer; passing a float string errors.
+        duration_int = max(1, int(round(seconds)))
+        try:
+            subprocess.run(
+                [
+                    "arecord", "-q", "-D", device,
+                    "-f", "S16_LE", "-r", "16000", "-c", "1",
+                    "-d", str(duration_int), str(raw),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=seconds + 5,
+            )
+        except subprocess.CalledProcessError as e:
+            stderr = (e.stderr or b"").decode(errors="replace").strip()
+            raise RuntimeError(f"arecord failed (rc={e.returncode}): {stderr}") from e
+
         if gain_db == 0 or not _tool_available("sox"):
             return raw.read_bytes()
-        subprocess.run(
-            ["sox", str(raw), str(boosted), "gain", str(gain_db)],
-            check=True,
-            capture_output=True,
-        )
+        try:
+            subprocess.run(
+                ["sox", str(raw), str(boosted), "gain", str(gain_db)],
+                check=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as e:
+            stderr = (e.stderr or b"").decode(errors="replace").strip()
+            raise RuntimeError(f"sox failed (rc={e.returncode}): {stderr}") from e
         return boosted.read_bytes()
     finally:
         raw.unlink(missing_ok=True)
