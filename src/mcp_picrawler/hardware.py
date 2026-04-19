@@ -10,7 +10,10 @@ import io
 import logging
 import os
 import random
+import statistics
+import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -38,11 +41,12 @@ BUILTIN_ACTIONS: tuple[str, ...] = (
     "dance",
 )
 
-# vilib detection toggles. "object" is intentionally omitted — vilib's object
-# detector requires a TFLite model + label set loaded via
-# object_detect_set_model()/set_labels() which we don't ship. Our Tier-C YOLO
-# stack provides object detection instead (see vision.VisionStack).
-DETECTIONS: tuple[str, ...] = ("face", "color", "qr", "gesture", "traffic")
+# vilib detection toggles. Omitted:
+#  - "object": vilib's object_detect needs a TFLite model + label set we don't
+#    ship. Our Tier-C YOLO stack (vision.VisionStack) covers this already.
+#  - "gesture": vilib's hands_detect_switch depends on mediapipe, which has no
+#    wheel for cp313 aarch64 (Python 3.13 on Pi OS). Build-from-source is hours.
+DETECTIONS: tuple[str, ...] = ("face", "color", "qr", "traffic")
 
 
 @dataclass
@@ -186,6 +190,10 @@ class RealHardware:
 
     kind = "real"
 
+    # Ultrasonic smoothing config
+    ULTRASONIC_POLL_HZ = 10
+    ULTRASONIC_WINDOW_S = 7
+
     def __init__(self, stream_host: str = "0.0.0.0", stream_port: int = 9000) -> None:
         from picrawler import Picrawler  # type: ignore[import-not-found]
         from robot_hat import TTS, Ultrasonic, Pin  # type: ignore[import-not-found]
@@ -209,8 +217,37 @@ class RealHardware:
         except Exception as e:
             log.warning("enable_speaker() failed (%s) — TTS may be silent", e)
 
+        # Background ultrasonic reader — HC-SR04 is flaky (timeouts, -1/-2
+        # sentinels on random reads). A dedicated thread polls at a steady
+        # rate into a rolling window so read_distance_cm can return a smoothed
+        # median that hides transient errors.
+        window_size = max(3, self.ULTRASONIC_POLL_HZ * self.ULTRASONIC_WINDOW_S)
+        self._distance_samples: deque[float] = deque(maxlen=window_size)
+        self._distance_lock = threading.Lock()
+        self._distance_stop = threading.Event()
+        self._distance_thread = threading.Thread(
+            target=self._ultrasonic_poll_loop,
+            name="ultrasonic-poller",
+            daemon=True,
+        )
+        self._distance_thread.start()
+
         Vilib.camera_start(vflip=False, hflip=False)
         Vilib.display(local=False, web=True)
+
+    def _ultrasonic_poll_loop(self) -> None:
+        """Poll ultrasonic at ULTRASONIC_POLL_HZ; drop sentinels."""
+        period = 1.0 / self.ULTRASONIC_POLL_HZ
+        while not self._distance_stop.is_set():
+            try:
+                raw = float(self._ultrasonic.read())
+            except Exception as e:  # sensor driver hiccup
+                log.debug("ultrasonic raw read failed: %s", e)
+                raw = -1.0
+            if raw > 0 and raw < 500:  # valid range: 1–500cm
+                with self._distance_lock:
+                    self._distance_samples.append(raw)
+            self._distance_stop.wait(period)
 
     def do_action(self, name: str, steps: int = 1, speed: int = 90) -> None:
         if name not in BUILTIN_ACTIONS:
@@ -224,16 +261,17 @@ class RealHardware:
         self.state.last_action = "stop"
 
     def read_distance_cm(self) -> float:
-        # Ultrasonic.read() returns cm as float, or -1 on timeout, -2 on failure.
-        # Coalesce both sentinels to NaN-ish large value upstream consumers can filter.
-        raw = self._ultrasonic.read()
-        try:
-            value = float(raw)
-        except (TypeError, ValueError):
-            return -1.0
-        if value < 0:
-            log.debug("ultrasonic returned sentinel %s (timeout/failure)", value)
-        return value
+        """Return the median of recent valid ultrasonic readings.
+
+        The background thread poller drops sentinels (-1/-2) and out-of-range
+        values. If no valid reading has landed in the current window (sensor
+        is fully broken), we return -1 so callers can still tell.
+        """
+        with self._distance_lock:
+            if not self._distance_samples:
+                return -1.0
+            # median is robust to outliers (the one bad read in 50).
+            return round(statistics.median(self._distance_samples), 2)
 
     def latest_frame_bgr(self, retry_budget_s: float = 3.0):
         """Return the latest camera frame as a numpy BGR array.
@@ -283,7 +321,6 @@ class RealHardware:
         switch = {
             "face": self._vilib.face_detect_switch,
             "qr": self._vilib.qrcode_detect_switch,
-            "gesture": self._vilib.hands_detect_switch,
             "traffic": self._vilib.traffic_detect_switch,
         }[feature]
         switch(enabled)
@@ -307,10 +344,6 @@ class RealHardware:
             )
         if self.state.vision.get("qr"):
             out.append(Detection("qr", {"data": params.get("qr_data", "")}))
-        if self.state.vision.get("gesture"):
-            # hands_joints is a list when hands are visible
-            joints = params.get("hands_joints", []) or []
-            out.append(Detection("gesture", {"n": len(joints)}))
         return out
 
     def set_target_color(self, color: str) -> None:

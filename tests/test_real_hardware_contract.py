@@ -57,7 +57,12 @@ def real_hw(monkeypatch):
     from mcp_picrawler.hardware import RealHardware
 
     hw = RealHardware()
-    return hw, picrawler_mod, robot_hat_mod, vilib_mod
+    try:
+        yield hw, picrawler_mod, robot_hat_mod, vilib_mod
+    finally:
+        # Stop the ultrasonic background thread so it doesn't leak across tests.
+        hw._distance_stop.set()
+        hw._distance_thread.join(timeout=1.0)
 
 
 # ------------------------------------------------------------ init contract
@@ -106,19 +111,25 @@ def test_stop_calls_stand_action(real_hw):
 
 # ------------------------------------------------------------ ultrasonic
 
-def test_read_distance_passes_through_float(real_hw):
-    hw, _, robot_hat_mod, _ = real_hw
-    hw._ultrasonic.read.return_value = 42.5
-    assert hw.read_distance_cm() == 42.5
-
-
-def test_read_distance_preserves_negative_sentinels(real_hw):
-    """Ultrasonic uses -1 (timeout) / -2 (failure) — we pass these up, don't mask as 0."""
+def test_read_distance_returns_minus_one_when_no_samples_yet(real_hw):
+    """Before the background poller has collected any valid reading,
+    read_distance_cm returns -1 so callers know the sensor is unhelpful."""
     hw, _, _, _ = real_hw
-    hw._ultrasonic.read.return_value = -1
+    with hw._distance_lock:
+        hw._distance_samples.clear()
     assert hw.read_distance_cm() == -1.0
-    hw._ultrasonic.read.return_value = -2
-    assert hw.read_distance_cm() == -2.0
+
+
+def test_read_distance_returns_median_of_samples(real_hw):
+    """The smoother returns the median of recent valid readings —
+    robust against one bad point in a window of good ones."""
+    hw, _, _, _ = real_hw
+    with hw._distance_lock:
+        hw._distance_samples.clear()
+        for v in (50.0, 51.0, 52.0, 150.0, 51.5):  # 150 is an outlier
+            hw._distance_samples.append(v)
+    # median of the 5 values sorted is 51.5 — the outlier doesn't shift it.
+    assert hw.read_distance_cm() == 51.5
 
 
 # ------------------------------------------------------------ frame access
@@ -184,10 +195,11 @@ def test_set_vision_qr_calls_qrcode_detect_switch(real_hw):
     vilib_mod.Vilib.qrcode_detect_switch.assert_called_once_with(True)
 
 
-def test_set_vision_gesture_calls_hands_detect_switch(real_hw):
-    hw, _, _, vilib_mod = real_hw
-    hw.set_vision("gesture", True)
-    vilib_mod.Vilib.hands_detect_switch.assert_called_once_with(True)
+def test_set_vision_gesture_not_supported(real_hw):
+    """mediapipe has no cp313 aarch64 wheel — gesture is dropped from DETECTIONS."""
+    hw, _, _, _ = real_hw
+    with pytest.raises(ValueError, match="unknown detection"):
+        hw.set_vision("gesture", True)
 
 
 def test_set_vision_traffic_calls_traffic_detect_switch(real_hw):

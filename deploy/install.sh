@@ -73,7 +73,11 @@ fi
 # SunFounder libs (picrawler/robot_hat/vilib) are NOT installed via pip —
 # they come from bootstrap.sh (sudo python3 setup.py install) and the venv
 # sees them via --system-site-packages. Do not add them here.
-EXTRAS="vision"
+#
+# vision  = YOLO object detection (required)
+# caption = Moondream scene descriptions via transformers+torch (~2GB model
+#           downloaded lazily on first call; deps installed unconditionally)
+EXTRAS="vision,caption"
 if [ -f /etc/picrawler-voice.env ]; then
   EXTRAS="${EXTRAS},voice"
   say "voice env file detected — including voice extras"
