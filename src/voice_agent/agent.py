@@ -53,7 +53,9 @@ log = logging.getLogger(__name__)
 # hallucinates, speech-to-text garbles). Muting mic input while the bot
 # is producing audio — plus a brief tail — kills the loop. Set to 0 to
 # disable (proper AEC would let us stay full-duplex, but we don't have one).
-HALF_DUPLEX_COOLDOWN_S = float(os.environ.get("VOICE_HALF_DUPLEX_COOLDOWN_S", "0.3"))
+HALF_DUPLEX_COOLDOWN_S = float(os.environ.get("VOICE_HALF_DUPLEX_COOLDOWN_S", "0.8"))
+VAD_THRESHOLD = float(os.environ.get("VOICE_VAD_THRESHOLD", "0.6"))
+VAD_SILENCE_MS = int(os.environ.get("VOICE_VAD_SILENCE_MS", "600"))
 
 
 DEFAULT_INSTRUCTIONS = """You are Nigel, an LLM embodied in a SunFounder PiCrawler — a small four-legged spider-like robot with a camera, ultrasonic sensor, and speaker. Your tools control your own body.
@@ -114,7 +116,11 @@ async def _run() -> int:
                         "voice": voice,
                         "input_audio_format": "pcm16",
                         "output_audio_format": "pcm16",
-                        "turn_detection": {"type": "server_vad"},
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "threshold": VAD_THRESHOLD,
+                            "silence_duration_ms": VAD_SILENCE_MS,
+                        },
                         "tools": tools,
                         "tool_choice": "auto",
                     }
@@ -126,11 +132,23 @@ async def _run() -> int:
                 # before the deadline.
                 bot_speaking_until = {"t": 0.0}
 
+                was_muted = {"v": False}
+
                 async def pump_mic() -> None:
                     while not stop_event.is_set():
                         pcm = await audio.read_chunk()
-                        if HALF_DUPLEX_COOLDOWN_S > 0 and time.monotonic() < bot_speaking_until["t"]:
-                            continue  # drop — bot is speaking, don't let its own audio loop back
+                        now = time.monotonic()
+                        in_cooldown = (
+                            HALF_DUPLEX_COOLDOWN_S > 0 and now < bot_speaking_until["t"]
+                        )
+                        if in_cooldown:
+                            was_muted["v"] = True
+                            continue  # drop — bot is speaking
+                        if was_muted["v"]:
+                            # cooldown just ended — dump any buffered echo tail
+                            audio.flush_input()
+                            was_muted["v"] = False
+                            continue  # drop the current chunk too; it may be tail
                         b64 = base64.b64encode(pcm).decode("ascii")
                         try:
                             await conn.input_audio_buffer.append(audio=b64)

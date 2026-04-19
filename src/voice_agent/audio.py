@@ -167,6 +167,15 @@ class AudioIO:
         with self._out_lock:
             self._out_buf.clear()
 
+    def flush_input(self) -> None:
+        """Drop any queued mic chunks. Call this when exiting a mute window
+        so echo tail captured during bot speech doesn't get sent upstream."""
+        try:
+            while True:
+                self._in_q.get_nowait()
+        except queue.Empty:
+            pass
+
 
 # Legacy names kept for tests that imported them.
 SAMPLE_RATE = OPENAI_RATE
