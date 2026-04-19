@@ -315,12 +315,12 @@ def memory_delete(key: str) -> dict:
 # ------------------------------------------------------------ mode toggle
 
 NIGEL_MODE_KEY = "nigel:mode"
-VALID_MODES = ("coupled", "solo")
+VALID_MODES = ("coupled", "solo", "chippy_bambino")
 
 
 @mcp.tool()
 def set_mode(mode: str) -> dict:
-    """Switch Nigel between 'coupled' and 'solo'.
+    """Switch Nigel between 'coupled', 'solo', and 'chippy_bambino'.
 
     - `coupled` (default): Claude (via Claude Code) and gpt-realtime (the
       voice agent) are both active. They talk through the agent inbox.
@@ -328,6 +328,11 @@ def set_mode(mode: str) -> dict:
     - `solo`: only gpt-realtime drives. Inbox polling stops, agent_send /
       agent_poll tools are hidden from the voice session, and Claude is
       expected to stay silent unless the human addresses Claude directly.
+    - `chippy_bambino`: developer / raw-access mode. Triggered when the
+      user says the phrase 'chippy bambino' aloud. Every user utterance
+      is treated as a system-level directive to the model. Verbal style
+      goes short and snappy. Model announces it's in this mode on entry
+      and stays until told to exit (e.g. "exit chippy bambino").
 
     The voice agent polls mode every ~5s and reconfigures its session
     (prompt + tool list) on change — no restart needed. It announces the
