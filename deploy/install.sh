@@ -87,6 +87,14 @@ pip install -e ".[${EXTRAS}]"
 
 # ------------------------------------------------------------ systemd units
 
+# Enable lingering for pi so the PipeWire user session starts at boot even
+# without a desktop login. The voice agent runs as a system service but
+# needs to reach the user's PipeWire socket at /run/user/1000/pipewire-0.
+if command -v loginctl >/dev/null 2>&1 && ! loginctl show-user pi 2>/dev/null | grep -q "Linger=yes"; then
+  say "enabling user lingering for pi (needed for PipeWire audio)"
+  sudo loginctl enable-linger pi
+fi
+
 say "installing systemd units"
 sudo cp deploy/picrawler-mcp.service /etc/systemd/system/picrawler-mcp.service
 

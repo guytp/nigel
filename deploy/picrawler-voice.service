@@ -11,6 +11,11 @@ WorkingDirectory=/home/pi/nigel
 EnvironmentFile=/etc/picrawler-voice.env
 Environment=MCP_URL=http://127.0.0.1:8765/mcp
 Environment=VOICE_LOG=INFO
+# PipeWire lives in the pi user session. To reach it from a system service
+# we need XDG_RUNTIME_DIR pointing at the user's runtime dir. This requires
+# `loginctl enable-linger pi` so the user session is running at boot —
+# audio-setup.sh / install.sh do this on first run.
+Environment=XDG_RUNTIME_DIR=/run/user/1000
 ExecStart=/home/pi/nigel/.venv/bin/picrawler-voice
 Restart=on-failure
 RestartSec=5

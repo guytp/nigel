@@ -40,6 +40,12 @@ fi
 sudo systemctl enable --now bluetooth >/dev/null 2>&1 || true
 sudo rfkill unblock bluetooth >/dev/null 2>&1 || true
 
+# Lingering keeps pi's user session (incl. PipeWire) running after we log out,
+# which is what lets the picrawler-voice system service reach the PipeWire socket.
+if ! loginctl show-user pi 2>/dev/null | grep -q "Linger=yes"; then
+  sudo loginctl enable-linger pi
+fi
+
 # pi user needs to be in bluetooth group to access the agent
 if ! groups pi 2>/dev/null | grep -qw bluetooth; then
   sudo usermod -aG bluetooth pi
