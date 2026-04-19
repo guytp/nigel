@@ -37,6 +37,7 @@ import json
 import logging
 import os
 import signal
+import subprocess
 import time
 
 from openai import AsyncOpenAI
@@ -75,6 +76,26 @@ BOT_SPEAKING_WINDOW_S = float(os.environ.get("VOICE_BOT_SPEAKING_WINDOW_S", "0.5
 
 AGENT_POLL_INTERVAL_S = float(os.environ.get("VOICE_AGENT_POLL_INTERVAL_S", "2.0"))
 AGENT_IDENTITY = os.environ.get("VOICE_AGENT_IDENTITY", "nigel")
+
+# Persistent speaker volume reduction to shrink echo bleed into the mic.
+# "" (empty) = don't touch the volume; "60" = set to 60% at startup.
+SPEAKER_VOLUME_PCT = os.environ.get("VOICE_SPEAKER_VOLUME_PCT", "").strip()
+SPEAKER_CARD = os.environ.get("VOICE_SPEAKER_CARD", "3")
+SPEAKER_CONTROL = os.environ.get("VOICE_SPEAKER_CONTROL", "Digital")
+
+
+def _set_speaker_volume() -> None:
+    """Best-effort: duck Robot HAT speaker volume via amixer to reduce echo.
+
+    Leaves volume alone if VOICE_SPEAKER_VOLUME_PCT isn't set."""
+    if not SPEAKER_VOLUME_PCT:
+        return
+    cmd = ["amixer", "-c", SPEAKER_CARD, "sset", SPEAKER_CONTROL, f"{SPEAKER_VOLUME_PCT}%"]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, timeout=5)
+        log.info("set speaker volume to %s%% via %s", SPEAKER_VOLUME_PCT, " ".join(cmd))
+    except Exception as e:
+        log.warning("couldn't set speaker volume (%s: %s)", " ".join(cmd), e)
 
 
 DEFAULT_INSTRUCTIONS = """You are Nigel, a test robot. You're an instance of gpt-realtime providing voice I/O for a PiCrawler quadruped body. Pete assembled the hardware; Claude (Anthropic) wrote the MCP integration. Guy and Pete are the devs you're working with. Home lab test session, not a product.
@@ -127,6 +148,8 @@ async def _run() -> int:
             loop.add_signal_handler(sig, _handle_signal)
         except NotImplementedError:
             pass  # windows or embedded runner
+
+    _set_speaker_volume()
 
     async with CrawlerMCPBridge(mcp_url, mcp_token) as bridge:
         tools = await bridge.openai_tool_defs()
@@ -233,14 +256,23 @@ async def _run() -> int:
                                 sender = m.get("from", "?")
                                 body = m.get("message", "")
                                 log.info("inbox ← from=%s id=%s: %s", sender, mid, body[:120])
+                                # role=user (not system) so the model treats
+                                # it as a turn it should respond to. Explicit
+                                # speak directive so the audio modality fires.
                                 await conn.conversation.item.create(
                                     item={
                                         "type": "message",
-                                        "role": "system",
+                                        "role": "user",
                                         "content": [
                                             {
                                                 "type": "input_text",
-                                                "text": f"[from {sender}] {body}",
+                                                "text": (
+                                                    f"[Inter-agent message from {sender}]\n"
+                                                    f"{body}\n\n"
+                                                    "Speak this aloud to the humans now — verbatim "
+                                                    "or lightly paraphrased for natural delivery. "
+                                                    "Don't reply to me, the sender; just relay."
+                                                ),
                                             }
                                         ],
                                     }

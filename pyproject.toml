@@ -31,9 +31,14 @@ vision = [
     "ultralytics>=8.2",
 ]
 caption = [
-    "transformers>=4.40",
+    # Moondream2's HF remote code subclasses transformers' modelling
+    # internals. Transformers 4.48 added `all_tied_weights_keys` on
+    # PreTrainedModel which Moondream's HfMoondream class doesn't expose,
+    # so generation() crashes with AttributeError. Pin the compatible
+    # range. When Moondream2 updates, widen this.
+    "transformers>=4.44,<4.48",
     "torch>=2.2",
-    "accelerate>=0.30",
+    "accelerate>=0.30,<1.0",
     "einops>=0.7",
     "timm>=0.9",
 ]

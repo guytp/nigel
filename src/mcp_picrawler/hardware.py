@@ -96,6 +96,8 @@ class MockHardware:
     def do_action(self, name: str, steps: int = 1, speed: int = 90) -> None:
         if name not in BUILTIN_ACTIONS:
             raise ValueError(f"unknown action: {name}")
+        if name == "dance" and steps > 1:
+            steps = 1
         log.info("mock do_action %s step=%d speed=%d", name, steps, speed)
         self.state.last_action = name
         time.sleep(min(0.05 * steps, 0.5))
@@ -252,6 +254,13 @@ class RealHardware:
     def do_action(self, name: str, steps: int = 1, speed: int = 90) -> None:
         if name not in BUILTIN_ACTIONS:
             raise ValueError(f"unknown action: {name}")
+        # `dance` is a multi-beat routine that already takes ~30s for one
+        # iteration. Higher step counts yield 5+ minute choreographies and
+        # block the action queue — cap it in the hardware layer so callers
+        # can't accidentally freeze the robot.
+        if name == "dance" and steps > 1:
+            log.info("capping dance steps %d → 1 (routine is long enough)", steps)
+            steps = 1
         # picrawler uses `step=` (singular), not `steps=`.
         self._crawler.do_action(name, step=steps, speed=speed)
         self.state.last_action = name
