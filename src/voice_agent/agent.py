@@ -53,18 +53,25 @@ log = logging.getLogger(__name__)
 # hallucinates, speech-to-text garbles). Muting mic input while the bot
 # is producing audio — plus a brief tail — kills the loop. Set to 0 to
 # disable (proper AEC would let us stay full-duplex, but we don't have one).
-HALF_DUPLEX_COOLDOWN_S = float(os.environ.get("VOICE_HALF_DUPLEX_COOLDOWN_S", "0.8"))
 VAD_THRESHOLD = float(os.environ.get("VOICE_VAD_THRESHOLD", "0.6"))
 VAD_SILENCE_MS = int(os.environ.get("VOICE_VAD_SILENCE_MS", "600"))
 
-# Local RMS noise gate. Chunks below this (post-gain, on the 24kHz stream we
-# send to OpenAI) are dropped. Prevents OpenAI's server VAD from tripping on
-# silence / room noise / echo tail. Typical values:
-#   0      = disabled
-#   2000   = aggressive (drops quiet speech too)
-#   1000   = balanced
-#   500    = permissive (lets more through)
-NOISE_GATE_RMS = float(os.environ.get("VOICE_NOISE_GATE_RMS", "1000"))
+# Dual-threshold noise gate replaces hard half-duplex muting. The old design
+# muted mic entirely while the bot spoke, which killed barge-in. Instead:
+#
+#   - NOISE_GATE_RMS          applies when the bot is NOT speaking. Lets
+#                             normal speech through, drops ambient noise.
+#   - BOT_SPEAKING_GATE_RMS   applies while the bot is speaking (extended by
+#                             each audio.delta for BOT_SPEAKING_WINDOW_S).
+#                             Requires loud, deliberate speech to pass —
+#                             speaker echo bleed sits below this, but a
+#                             genuine "stop!" from the user still breaks
+#                             through and triggers OpenAI's barge-in.
+#
+# Chunks are post-gain (VOICE_MIC_GAIN_DB), so values are scaled by that gain.
+NOISE_GATE_RMS = float(os.environ.get("VOICE_NOISE_GATE_RMS", "800"))
+BOT_SPEAKING_GATE_RMS = float(os.environ.get("VOICE_BOT_SPEAKING_GATE_RMS", "5000"))
+BOT_SPEAKING_WINDOW_S = float(os.environ.get("VOICE_BOT_SPEAKING_WINDOW_S", "0.5"))
 
 
 DEFAULT_INSTRUCTIONS = """You are Nigel, an LLM embodied in a SunFounder PiCrawler — a small four-legged spider-like robot with a camera, ultrasonic sensor, and speaker. Your tools control your own body.
@@ -141,26 +148,13 @@ async def _run() -> int:
                 # before the deadline.
                 bot_speaking_until = {"t": 0.0}
 
-                was_muted = {"v": False}
-
                 async def pump_mic() -> None:
                     while not stop_event.is_set():
                         pcm = await audio.read_chunk()
                         now = time.monotonic()
-                        in_cooldown = (
-                            HALF_DUPLEX_COOLDOWN_S > 0 and now < bot_speaking_until["t"]
-                        )
-                        if in_cooldown:
-                            was_muted["v"] = True
-                            continue  # drop — bot is speaking
-                        if was_muted["v"]:
-                            # cooldown just ended — dump any buffered echo tail
-                            audio.flush_input()
-                            was_muted["v"] = False
-                            continue  # drop the current chunk too; it may be tail
-                        # Noise gate: drop quiet chunks so OpenAI's server VAD
-                        # isn't tickled by ambient noise or echo bleed-through.
-                        if NOISE_GATE_RMS > 0 and rms_int16(pcm) < NOISE_GATE_RMS:
+                        bot_speaking = now < bot_speaking_until["t"]
+                        gate = BOT_SPEAKING_GATE_RMS if bot_speaking else NOISE_GATE_RMS
+                        if gate > 0 and rms_int16(pcm) < gate:
                             continue
                         b64 = base64.b64encode(pcm).decode("ascii")
                         try:
@@ -176,10 +170,11 @@ async def _run() -> int:
                         et = getattr(event, "type", None)
                         if et == "response.audio.delta":
                             audio.enqueue_output(base64.b64decode(event.delta))
-                            # extend mute window for every audio chunk we emit
-                            bot_speaking_until["t"] = time.monotonic() + HALF_DUPLEX_COOLDOWN_S
+                            # extend "bot speaking" window; pump_mic raises its
+                            # gate threshold while we're inside it
+                            bot_speaking_until["t"] = time.monotonic() + BOT_SPEAKING_WINDOW_S
                         elif et == "input_audio_buffer.speech_started":
-                            audio.flush_output()  # barge-in (only fires if user speaks post-cooldown)
+                            audio.flush_output()  # barge-in — user's speech cleared the gate
                         elif et == "response.output_item.done":
                             item = getattr(event, "item", None)
                             if item is not None and getattr(item, "type", None) == "function_call":
