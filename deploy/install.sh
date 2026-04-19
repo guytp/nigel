@@ -54,6 +54,22 @@ say "upgrading pip + installing nigel"
 source .venv/bin/activate
 pip install --upgrade pip wheel
 
+# /tmp on Pi OS is tmpfs (~1.9GB on a 4GB Pi). Big wheel extractions blow it
+# up. Point pip's temp dir at the SD card instead.
+export TMPDIR="${TMPDIR:-/var/tmp}"
+mkdir -p "$TMPDIR"
+
+# Install CPU-only torch/torchvision from pytorch.org FIRST, before anything
+# else pulls in a torch dep. PyPI's aarch64 torch 2.10+ now declares Jetson
+# CUDA wheels (nvidia-cudnn, cusparse, cublas...) that are ~1.5GB and
+# completely useless on a Pi. torch 2.9.1+cpu is the last aarch64 CPU pair
+# before that regime.
+if ! python -c "import torch" 2>/dev/null; then
+  say "installing CPU-only torch + torchvision (avoids Jetson CUDA pulls)"
+  pip install --index-url https://download.pytorch.org/whl/cpu \
+    "torch==2.9.1+cpu" "torchvision==0.24.1"
+fi
+
 # SunFounder libs (picrawler/robot_hat/vilib) are NOT installed via pip —
 # they come from bootstrap.sh (sudo python3 setup.py install) and the venv
 # sees them via --system-site-packages. Do not add them here.
