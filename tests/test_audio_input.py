@@ -26,7 +26,7 @@ def test_record_wav_mock_returns_silent_wav():
 
 
 def test_transcribe_mock_returns_stubbed_text():
-    assert audio_input.transcribe(b"irrelevant") == "hello nigel how are you"
+    assert audio_input.transcribe(b"irrelevant") == "hey nigel how are you"
 
 
 def test_listen_structure():
