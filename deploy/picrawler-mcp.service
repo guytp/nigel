@@ -11,6 +11,10 @@ Environment=MCP_TRANSPORT=streamable-http
 Environment=MCP_HOST=0.0.0.0
 Environment=MCP_PORT=8765
 Environment=PICRAWLER_LOG=INFO
+# Lets paplay (invoked by the `speak` tool) reach the user pi's PipeWire
+# socket. Without this, paplay can't find the server and we fall back to
+# robot_hat's aplay → on-board SunFounder speaker.
+Environment=XDG_RUNTIME_DIR=/run/user/1000
 # Set MCP_TOKEN to require `Authorization: Bearer <token>` on every request.
 # Generate once with: openssl rand -hex 32
 EnvironmentFile=-/etc/picrawler-mcp.env
