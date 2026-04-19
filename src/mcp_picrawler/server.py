@@ -187,16 +187,17 @@ def listen(seconds: float = 5.0) -> dict:
 
 @mcp.tool()
 def listen_for_wake_word(
-    wake: str = "nigel",
+    wake: str = "hey nigel",
     timeout: float = 60.0,
     chunk_seconds: float = 3.0,
     capture_after: float = 4.0,
 ) -> dict:
-    """Listen in chunks until the wake word is heard, then capture what follows.
+    """Listen in chunks until the wake phrase is heard, then capture what follows.
 
-    Records `chunk_seconds` at a time, transcribes each, returns as soon as
-    `wake` appears (word-boundary, case-insensitive). After wake, captures
-    `capture_after` more seconds to get the rest of the user's utterance.
+    Default wake phrase is "hey nigel". Records `chunk_seconds` at a time,
+    transcribes each via Whisper, returns as soon as the phrase appears
+    (word-boundary, case-insensitive). Then captures `capture_after` more
+    seconds of speech so you get whatever the user said after the wake word.
 
     Returns {woke: bool, wake_chunk: str, followup: str, heard_chunks: [str], timed_out: bool}.
 

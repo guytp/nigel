@@ -129,7 +129,7 @@ def listen(seconds: float = 5.0) -> dict:
 
 
 def listen_for_wake_word(
-    wake: str = "nigel",
+    wake: str = "hey nigel",
     timeout: float = 60.0,
     chunk_seconds: float = 3.0,
     capture_after: float = 4.0,

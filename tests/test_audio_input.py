@@ -15,7 +15,7 @@ from mcp_picrawler import audio_input
 @pytest.fixture(autouse=True)
 def mock_env(monkeypatch):
     monkeypatch.setenv("PICRAWLER_AUDIO_MOCK", "1")
-    monkeypatch.setenv("PICRAWLER_AUDIO_MOCK_TRANSCRIPT", "hello nigel how are you")
+    monkeypatch.setenv("PICRAWLER_AUDIO_MOCK_TRANSCRIPT", "hey nigel how are you")
 
 
 def test_record_wav_mock_returns_silent_wav():
