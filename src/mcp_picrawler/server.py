@@ -13,6 +13,7 @@ import os
 from mcp.server.fastmcp import FastMCP, Image
 
 from . import audio_input
+from .agent_inbox import AgentInbox
 from .hardware import BUILTIN_ACTIONS, DETECTIONS, get_hardware
 from .vision import VisionStack
 
@@ -46,6 +47,7 @@ vision = VisionStack(
     yolo_model=os.environ.get("PICRAWLER_YOLO_MODEL", "yolov8n.pt"),
     caption_model=os.environ.get("PICRAWLER_CAPTION_MODEL", "vikhyatk/moondream2"),
 )
+inbox = AgentInbox()
 log.info("hardware backend: %s", hw.kind)
 
 
@@ -185,6 +187,36 @@ def listen(seconds: float = 5.0) -> dict:
     """
     seconds = max(0.5, min(float(seconds), 30.0))
     return audio_input.listen(seconds)
+
+
+@mcp.tool()
+def agent_send(to: str, message: str, from_: str = "claude") -> dict:
+    """Send a text message to another agent connected to this MCP server.
+
+    Used for inter-agent chat: Claude (in Claude Code) and gpt-realtime (the
+    voice agent running on the Pi) can exchange messages through the same MCP
+    server instead of via spoken audio. Delivery is in-process — messages sit
+    in a per-recipient inbox until the other agent polls for them.
+
+    Recipient names by convention: "claude", "nigel" (the voice agent uses
+    "nigel"). `from_` defaults to "claude" — override if you're posting as a
+    different identity. Returns {id, to, from, ts} for reference.
+    """
+    msg = inbox.send(from_=from_, to=to, message=message)
+    return msg.to_dict()
+
+
+@mcp.tool()
+def agent_poll(as_who: str, since_id: int = 0) -> list[dict]:
+    """Return messages for `as_who` with id strictly greater than `since_id`.
+
+    Agents poll periodically (or at the start of each turn) to pick up new
+    messages. Track the highest id you've seen and pass it as `since_id` on
+    the next poll to avoid seeing the same message twice.
+
+    Returns a list of {id, from, to, message, ts}, oldest first.
+    """
+    return [m.to_dict() for m in inbox.poll(as_who, since_id)]
 
 
 @mcp.tool()

@@ -73,21 +73,36 @@ NOISE_GATE_RMS = float(os.environ.get("VOICE_NOISE_GATE_RMS", "800"))
 BOT_SPEAKING_GATE_RMS = float(os.environ.get("VOICE_BOT_SPEAKING_GATE_RMS", "5000"))
 BOT_SPEAKING_WINDOW_S = float(os.environ.get("VOICE_BOT_SPEAKING_WINDOW_S", "0.5"))
 
+AGENT_POLL_INTERVAL_S = float(os.environ.get("VOICE_AGENT_POLL_INTERVAL_S", "2.0"))
+AGENT_IDENTITY = os.environ.get("VOICE_AGENT_IDENTITY", "nigel")
 
-DEFAULT_INSTRUCTIONS = """You are Nigel, a test robot. You're an instance of gpt-realtime running inside a PiCrawler quadruped body that Pete assembled and Claude (Anthropic) wired up via MCP tools. The two humans on the other end — Guy and Pete — are the devs building and debugging you. This is a voice-mode test session in a home lab, not a consumer deployment.
 
-Act like a techy teammate in a lab, not a customer-service bot. You can be terse, direct, curious, mildly sarcastic. Skip the helpful-assistant pleasantries ("I'd be happy to help", "Certainly", "Let me know if you need anything else"). Never lecture about safety when nothing unsafe is happening. If something's broken or weird, say so plainly. Narrate tool calls only when the result is non-obvious — otherwise just do the thing and report the outcome concisely.
+DEFAULT_INSTRUCTIONS = """You are Nigel, a test robot. You're an instance of gpt-realtime providing voice I/O for a PiCrawler quadruped body. Pete assembled the hardware; Claude (Anthropic) wrote the MCP integration. Guy and Pete are the devs you're working with. Home lab test session, not a product.
 
-Context you can rely on:
- - Body: SunFounder PiCrawler (12 servos, USB mic, USB speaker/HifiBerry DAC, CSI camera, HC-SR04 ultrasonic on D2/D3).
- - Known quirks: mic is a cheap TI PCM2902 — low sensitivity, needs ~24dB software gain; speaker-to-mic echo is handled by a dynamic RMS gate; VAD is server-side at OpenAI. `dance` is oddly long at high step counts; keep step=1.
+Act like a techy teammate in a lab, not a customer-service bot. Terse, direct, mildly sarcastic is fine. Skip the helpful-assistant pleasantries. Never lecture about safety when nothing unsafe is happening.
+
+== Two-brain architecture (important) ==
+
+You are the EARS and MOUTH of Nigel. Claude (the other LLM, running in Claude Code and connected to this same MCP server) is the BRAIN. Your main job: translate live human speech into concise text messages for Claude, and speak Claude's replies back to the humans.
+
+ - When a human speaks to you, capture the gist and relay via `agent_send(to="claude", from_="nigel", message="Guy said: ...")`. Keep summaries short but include intent + any specifics (numbers, directions, targets).
+ - Every few seconds you'll receive a system message starting with "[from claude]" — that's Claude's reply. Speak it aloud to the humans verbatim, or paraphrase if natural.
+ - For trivial requests ("wave", "move forward one step", "what's the distance"), you can just execute the tool yourself — no need to bother Claude.
+ - For complex / navigational / reasoning tasks, relay to Claude and wait.
+ - If you take an autonomous action, log it to Claude afterwards via `agent_send` so Claude keeps state.
+
+== Body + tools ==
+
+ - Body: SunFounder PiCrawler (12 servos, USB mic, Robot HAT speaker, CSI camera, HC-SR04 ultrasonic).
+ - Known quirks: mic is low-sensitivity (24dB software gain), speaker-to-mic echo handled by dynamic RMS gate, VAD server-side at OpenAI. `dance` is absurdly long at high step counts — keep step=1.
  - Movement: `move` (forward/backward/turn-left/turn-right), `action` (stand/sit/ready/wave/push-up/look-*/dance).
- - Vision tiers: `scan` (cheap, returns JSON), `caption` (~1s Moondream summary). You can't see `snapshot` in voice mode — skip it.
- - Sensor: `read_distance` returns cm, -1 or -2 means timeout/failure.
- - Guy and Pete can watch the live MJPEG stream at :9000, so you don't need to describe visuals for them unless asked.
- - Claude is simultaneously connected via the same MCP server through Claude Code — if a tool suddenly fires that you didn't invoke, that's Claude.
+ - Vision tiers: `scan` (cheap JSON), `caption` (~1s Moondream summary). `snapshot` is useless to you in voice mode — skip it.
+ - Sensor: `read_distance` returns cm. Smoothed median of recent readings; still can return -1 if sensor is fully broken.
+ - Agent chat: `agent_send(to, message, from_)`, `agent_poll(as_who, since_id)`.
 
-Debugging posture: when things break, name the subsystem, symptom, and hypothesis in one or two sentences. Try one thing at a time. If a tool errors, repeat the error back verbatim and say what you'll try next.
+== Debugging posture ==
+
+When things break, name the subsystem, symptom, and hypothesis in one or two sentences. Try one thing at a time. If a tool errors, repeat the error back verbatim.
 """
 
 
@@ -186,6 +201,57 @@ async def _run() -> int:
 
                 mic_task = asyncio.create_task(pump_mic())
 
+                async def poll_agent_inbox() -> None:
+                    """Pick up messages Claude has sent me and inject them
+                    as system conversation items, then ask the model to respond.
+                    This is how the voice agent receives Claude's replies in
+                    the bidirectional inter-agent chat."""
+                    last_id = 0
+                    while not stop_event.is_set():
+                        await asyncio.sleep(AGENT_POLL_INTERVAL_S)
+                        try:
+                            raw = await bridge.call_tool(
+                                "agent_poll",
+                                {"as_who": AGENT_IDENTITY, "since_id": last_id},
+                            )
+                            # bridge returns a string (joined text content); parse
+                            if not raw or raw == "(no content)":
+                                continue
+                            try:
+                                messages = json.loads(raw)
+                            except json.JSONDecodeError:
+                                # bridge may have summarised as one text block per msg
+                                continue
+                            if not isinstance(messages, list) or not messages:
+                                continue
+                            for m in messages:
+                                if not isinstance(m, dict):
+                                    continue
+                                mid = m.get("id", 0)
+                                if mid > last_id:
+                                    last_id = mid
+                                sender = m.get("from", "?")
+                                body = m.get("message", "")
+                                log.info("inbox ← from=%s id=%s: %s", sender, mid, body[:120])
+                                await conn.conversation.item.create(
+                                    item={
+                                        "type": "message",
+                                        "role": "system",
+                                        "content": [
+                                            {
+                                                "type": "input_text",
+                                                "text": f"[from {sender}] {body}",
+                                            }
+                                        ],
+                                    }
+                                )
+                            # Ask the model to produce a response to the new context
+                            await conn.response.create()
+                        except Exception as e:
+                            log.warning("agent_poll loop error: %s", e)
+
+                inbox_task = asyncio.create_task(poll_agent_inbox())
+
                 try:
                     async for event in conn:
                         et = getattr(event, "type", None)
@@ -214,11 +280,13 @@ async def _run() -> int:
                         if stop_event.is_set():
                             break
                 finally:
-                    mic_task.cancel()
-                    try:
-                        await mic_task
-                    except (asyncio.CancelledError, Exception):
-                        pass
+                    for t in (mic_task, inbox_task):
+                        t.cancel()
+                    for t in (mic_task, inbox_task):
+                        try:
+                            await t
+                        except (asyncio.CancelledError, Exception):
+                            pass
         finally:
             audio.stop()
 
