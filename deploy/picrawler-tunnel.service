@@ -1,0 +1,22 @@
+[Unit]
+Description=Cloudflare Quick Tunnel → PiCrawler MCP
+After=network-online.target picrawler-mcp.service
+Wants=network-online.target
+Requires=picrawler-mcp.service
+
+[Service]
+Type=simple
+User=pi
+ExecStart=/usr/bin/cloudflared tunnel --url http://127.0.0.1:8765 --no-autoupdate
+Restart=on-failure
+RestartSec=5
+
+# Hardening — the tunnel binary only needs network + its config dir.
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes
+ReadWritePaths=/home/pi/.cloudflared
+
+[Install]
+WantedBy=multi-user.target

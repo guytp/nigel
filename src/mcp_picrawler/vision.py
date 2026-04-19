@@ -72,6 +72,7 @@ class VisionStack:
         self._yolo = None
         self._moondream = None
         self._moondream_tokenizer = None
+        self._ocr_reader = None
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------ T0
@@ -157,6 +158,47 @@ class VisionStack:
                     self._caption_model_name, trust_remote_code=True
                 )
         return self._moondream, self._moondream_tokenizer
+
+    # ------------------------------------------------------------------ OCR
+
+    def _load_ocr(self):
+        if self._ocr_reader is not None:
+            return self._ocr_reader
+        try:
+            import easyocr  # type: ignore[import-not-found]
+        except ImportError as e:
+            raise RuntimeError(
+                "OCR unavailable — install with `pip install '.[ocr]'`"
+            ) from e
+        with self._lock:
+            if self._ocr_reader is None:
+                log.info("loading easyocr (first call; downloads models)")
+                # CPU only on the Pi; gpu=False avoids torch CUDA checks
+                self._ocr_reader = easyocr.Reader(["en"], gpu=False, verbose=False)
+        return self._ocr_reader
+
+    def read_text(self, frame_bgr, min_confidence: float = 0.3) -> list[dict]:
+        """OCR the frame and return text regions above `min_confidence`.
+
+        Each hit: {text, conf, bbox: [x1, y1, x2, y2]}. Uses easyocr in CPU
+        mode. Expect 2-5s on a Pi 5 per frame.
+        """
+        reader = self._load_ocr()
+        results = reader.readtext(frame_bgr)
+        out: list[dict] = []
+        for bbox_pts, text, conf in results:
+            if conf < min_confidence:
+                continue
+            xs = [int(p[0]) for p in bbox_pts]
+            ys = [int(p[1]) for p in bbox_pts]
+            out.append(
+                {
+                    "text": text,
+                    "conf": round(float(conf), 3),
+                    "bbox": [min(xs), min(ys), max(xs), max(ys)],
+                }
+            )
+        return out
 
     def caption(self, frame_bgr, prompt: str | None = None) -> str:
         from PIL import Image

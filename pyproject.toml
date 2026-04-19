@@ -30,6 +30,11 @@ dependencies = [
 vision = [
     "ultralytics>=8.2",
 ]
+ocr = [
+    # easyocr pulls torch+torchvision (already in [vision]/[caption]) plus
+    # its own trained weights (~100MB, lazy-downloaded).
+    "easyocr>=1.7",
+]
 caption = [
     # Moondream2's HF remote code subclasses transformers' modelling
     # internals. Transformers 4.48 added `all_tied_weights_keys` on

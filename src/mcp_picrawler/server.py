@@ -15,9 +15,16 @@ from mcp.server.fastmcp import FastMCP, Image
 from . import audio_input
 from .agent_inbox import AgentInbox
 from .hardware import BUILTIN_ACTIONS, DETECTIONS, get_hardware
+from .memory_store import MemoryStore
 from .vision import VisionStack
 
 log = logging.getLogger(__name__)
+
+# Safety reflex: if the smoothed ultrasonic reports less than this (cm) and
+# the caller asked us to move forward, we stop before the step. -1/-2 sentinels
+# are ignored (broken sensor can't block movement). Override with env var.
+SAFETY_MIN_FORWARD_CM = float(os.environ.get("PICRAWLER_SAFETY_MIN_CM", "15"))
+
 
 mcp = FastMCP(
     name="picrawler",
@@ -48,6 +55,7 @@ vision = VisionStack(
     caption_model=os.environ.get("PICRAWLER_CAPTION_MODEL", "vikhyatk/moondream2"),
 )
 inbox = AgentInbox()
+memory = MemoryStore()
 log.info("hardware backend: %s", hw.kind)
 
 
@@ -62,12 +70,30 @@ def move(direction: str, steps: int = 1, speed: int = 90) -> list:
     direction: one of "forward", "backward", "turn left", "turn right"
     steps: gait cycles (1-10 sensible)
     speed: 1-100, default 90
+
+    Safety: forward moves check the ultrasonic between each step and abort
+    if we get within PICRAWLER_SAFETY_MIN_CM (default 15cm) of an obstacle.
+    Broken sensor (-1/-2) does not block movement. Other directions are not
+    safety-gated — the ultrasonic only faces forward.
     """
     allowed = {"forward", "backward", "turn left", "turn right"}
     if direction not in allowed:
         raise ValueError(f"direction must be one of {sorted(allowed)}")
     steps = max(1, min(int(steps), 20))
     speed = max(1, min(int(speed), 100))
+
+    if direction == "forward":
+        for i in range(steps):
+            d = hw.read_distance_cm()
+            if 0 < d < SAFETY_MIN_FORWARD_CM:
+                return [
+                    f"stopped after {i} of {steps} steps: obstacle at {d}cm "
+                    f"< safety threshold {SAFETY_MIN_FORWARD_CM}cm",
+                    _frame(),
+                ]
+            hw.do_action(direction, 1, speed)
+        return [f"moved forward x{steps} @ speed {speed}", _frame()]
+
     hw.do_action(direction, steps, speed)
     return [f"moved {direction} x{steps} @ speed {speed}", _frame()]
 
@@ -119,6 +145,26 @@ def scan(include_objects: bool = True, object_conf: float = 0.35) -> dict:
     frame = hw.latest_frame_bgr()
     result = vision.scan(frame, include_objects=include_objects, object_conf=object_conf)
     return result.to_dict()
+
+
+@mcp.tool()
+def read_text(min_confidence: float = 0.3) -> dict:
+    """OCR the current camera frame. Returns recognised text regions.
+
+    Output: {"regions": [{text, conf, bbox: [x1,y1,x2,y2]}], "joined": "..."}
+    `joined` is all text concatenated top-to-bottom for easy reading.
+
+    Useful for reading screens, signs, whiteboards, book pages. Slower than
+    `scan` (~2-5s on a Pi); prefer `scan` first to check if text-ish things
+    are even in view.
+    """
+    frame = hw.latest_frame_bgr()
+    regions = vision.read_text(frame, min_confidence=max(0.0, min(float(min_confidence), 1.0)))
+    regions_sorted = sorted(regions, key=lambda r: (r["bbox"][1], r["bbox"][0]))
+    return {
+        "regions": regions_sorted,
+        "joined": " ".join(r["text"] for r in regions_sorted),
+    }
 
 
 @mcp.tool()
@@ -204,6 +250,60 @@ def agent_send(to: str, message: str, from_: str = "claude") -> dict:
     """
     msg = inbox.send(from_=from_, to=to, message=message)
     return msg.to_dict()
+
+
+@mcp.tool()
+def memory_set(key: str, value: str, tags: list[str] | None = None, author: str = "") -> dict:
+    """Write a persistent fact, preference, or observation to Nigel's memory.
+
+    Both Claude (Claude Code) and gpt-realtime (voice agent) share this
+    store — a fact written by one is readable by the other and survives
+    service restarts.
+
+    Use for: who lives here, room layout, user preferences, observations
+    worth keeping ("Guy prefers his tea strong"), calibration notes
+    ("ultrasonic reads -2 when pointed at fabric"). Avoid: ephemeral
+    chatter, raw tool outputs.
+
+    Arguments:
+        key: stable identifier (namespace with colons, e.g. "user:guy:tea")
+        value: the content. Strings stored verbatim; other types JSON-encoded.
+        tags: optional list for categorising, e.g. ["preference", "user"]
+        author: who wrote it — "claude" or "nigel". Helps attribution.
+
+    Returns the stored record.
+    """
+    return memory.set(key=key, value=value, tags=tags, author=author)
+
+
+@mcp.tool()
+def memory_get(key: str) -> dict | None:
+    """Read one memory by exact key. Returns None if not found."""
+    return memory.get(key)
+
+
+@mcp.tool()
+def memory_search(query: str, limit: int = 20) -> list[dict]:
+    """Substring-search memory keys, values, and tags. Newest first."""
+    return memory.search(query, limit=max(1, min(int(limit), 100)))
+
+
+@mcp.tool()
+def memory_by_tag(tag: str, limit: int = 50) -> list[dict]:
+    """List memories with a specific tag, newest first."""
+    return memory.by_tag(tag, limit=max(1, min(int(limit), 200)))
+
+
+@mcp.tool()
+def memory_list_keys(limit: int = 100) -> list[str]:
+    """List memory keys, most-recently-updated first."""
+    return memory.list_keys(limit=max(1, min(int(limit), 1000)))
+
+
+@mcp.tool()
+def memory_delete(key: str) -> dict:
+    """Delete a memory by key. Returns {deleted: bool}."""
+    return {"deleted": memory.delete(key)}
 
 
 @mcp.tool()

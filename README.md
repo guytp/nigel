@@ -61,6 +61,8 @@ After install, connect Claude Code by adding to `~/.claude.json` or project `.mc
 
 Full manual walkthrough, hardware calibration notes, and troubleshooting live in [`docs/pi-setup.md`](docs/pi-setup.md).
 
+Want to connect from claude.ai or anywhere outside the LAN? [`docs/public-mcp.md`](docs/public-mcp.md) has a Cloudflare tunnel script that gives you a public HTTPS endpoint in ~30 seconds.
+
 ### Smoke test after install
 
 Once the bootstrap finishes (reboot first if it said one was needed), run the self-test:

@@ -77,7 +77,8 @@ fi
 # vision  = YOLO object detection (required)
 # caption = Moondream scene descriptions via transformers+torch (~2GB model
 #           downloaded lazily on first call; deps installed unconditionally)
-EXTRAS="vision,caption"
+# ocr     = easyocr (~100MB of models lazy-downloaded on first read_text call)
+EXTRAS="vision,caption,ocr"
 if [ -f /etc/picrawler-voice.env ]; then
   EXTRAS="${EXTRAS},voice"
   say "voice env file detected — including voice extras"
