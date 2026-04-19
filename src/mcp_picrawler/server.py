@@ -187,6 +187,43 @@ def stream_resource() -> str:
     return hw.stream_url()
 
 
+def _configure_transport_security(host: str) -> None:
+    """Set DNS-rebinding-protection allow-list based on the actual bind host.
+
+    FastMCP auto-enables protection at construction time with loopback-only
+    hosts. We need to expand it when binding non-loopback, or any request
+    carrying a real hostname (nigel.local, a LAN IP) gets 421'd.
+
+    Behaviour:
+      - binding to loopback → keep the SDK defaults (protection ON, loopback only)
+      - MCP_ALLOWED_HOSTS set → protection ON, with that comma-separated list
+      - otherwise → protection OFF (we're trusting LAN + optional bearer token)
+    """
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    if host in ("127.0.0.1", "localhost", "::1"):
+        return  # SDK defaults already correct
+
+    env_hosts = os.environ.get("MCP_ALLOWED_HOSTS", "").strip()
+    if env_hosts:
+        allowed = [h.strip() for h in env_hosts.split(",") if h.strip()]
+        mcp.settings.transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=allowed,
+            allowed_origins=[f"http://{h}" for h in allowed],
+        )
+        log.info("MCP DNS-rebinding protection enabled for: %s", allowed)
+    else:
+        mcp.settings.transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=False,
+        )
+        log.warning(
+            "MCP DNS-rebinding protection disabled (bound to %s). "
+            "Set MCP_ALLOWED_HOSTS to re-enable with a hostname allow-list.",
+            host,
+        )
+
+
 def run() -> None:
     logging.basicConfig(level=os.environ.get("PICRAWLER_LOG", "INFO"))
     transport = os.environ.get("MCP_TRANSPORT", "stdio")
@@ -199,6 +236,8 @@ def run() -> None:
     host = os.environ.get("MCP_HOST", "127.0.0.1")
     port = int(os.environ.get("MCP_PORT", "8765"))
     token = os.environ.get("MCP_TOKEN", "").strip()
+
+    _configure_transport_security(host)
 
     if not token:
         # No auth — fall back to the SDK's built-in runner.
