@@ -418,22 +418,19 @@ async def _run() -> int:
                 inbox_task = asyncio.create_task(poll_agent_inbox())
 
                 audio_delta_stats = {"count": 0, "bytes": 0, "last_log": 0.0}
-                event_type_counter = {"last_log": 0.0, "types": {}}
+                # Log every event type arriving from OpenAI. Noisy but we need
+                # this for diagnosis — flat silence in the log means the
+                # websocket died on us without telling us.
+                seen_since_boot: set[str] = set()
 
                 try:
                     async for event in conn:
                         et = getattr(event, "type", None)
-                        # Unknown-event telemetry: counts every event type arriving
-                        # from OpenAI in the last 5s so we can see what's actually
-                        # flowing (vs. what we handle).
-                        if et:
-                            event_type_counter["types"][et] = event_type_counter["types"].get(et, 0) + 1
-                        now = time.monotonic()
-                        if now - event_type_counter["last_log"] > 5.0 and event_type_counter["types"]:
-                            summary = ", ".join(f"{k}={v}" for k, v in sorted(event_type_counter["types"].items()))
-                            log.info("events last 5s: %s", summary)
-                            event_type_counter["types"] = {}
-                            event_type_counter["last_log"] = now
+                        if et and et not in seen_since_boot:
+                            seen_since_boot.add(et)
+                            log.info("✦ first %s", et)
+                        elif et == "error":
+                            log.error("OpenAI error event: %r", getattr(event, "error", event))
                         if et == "response.audio.delta":
                             decoded = base64.b64decode(event.delta)
                             audio.enqueue_output(decoded)
