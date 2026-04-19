@@ -12,6 +12,7 @@ import os
 
 from mcp.server.fastmcp import FastMCP, Image
 
+from . import audio_input
 from .hardware import BUILTIN_ACTIONS, DETECTIONS, get_hardware
 from .vision import VisionStack
 
@@ -168,6 +169,48 @@ def speak(text: str) -> str:
     """Speak text aloud via the on-board speaker."""
     hw.speak(text)
     return f"spoke: {text!r}"
+
+
+@mcp.tool()
+def listen(seconds: float = 5.0) -> dict:
+    """Record from the USB mic for `seconds`, transcribe via Whisper, return the text.
+
+    The mic pipeline applies software gain (PICRAWLER_AUDIO_GAIN_DB, default 20dB).
+    Requires OPENAI_API_KEY in the service environment.
+
+    Use this for one-shot capture when you know the user is about to speak.
+    For unsolicited speech detection, use `listen_for_wake_word`.
+    """
+    seconds = max(0.5, min(float(seconds), 30.0))
+    return audio_input.listen(seconds)
+
+
+@mcp.tool()
+def listen_for_wake_word(
+    wake: str = "nigel",
+    timeout: float = 60.0,
+    chunk_seconds: float = 3.0,
+    capture_after: float = 4.0,
+) -> dict:
+    """Listen in chunks until the wake word is heard, then capture what follows.
+
+    Records `chunk_seconds` at a time, transcribes each, returns as soon as
+    `wake` appears (word-boundary, case-insensitive). After wake, captures
+    `capture_after` more seconds to get the rest of the user's utterance.
+
+    Returns {woke: bool, wake_chunk: str, followup: str, heard_chunks: [str], timed_out: bool}.
+
+    Whisper cost: roughly $0.006/min of audio. With default 3s chunks, ~$0.0003 per chunk.
+    """
+    timeout = max(5.0, min(float(timeout), 600.0))
+    chunk_seconds = max(1.5, min(float(chunk_seconds), 10.0))
+    capture_after = max(1.0, min(float(capture_after), 15.0))
+    return audio_input.listen_for_wake_word(
+        wake=wake,
+        timeout=timeout,
+        chunk_seconds=chunk_seconds,
+        capture_after=capture_after,
+    )
 
 
 @mcp.resource("picrawler://state")

@@ -16,6 +16,9 @@ dependencies = [
     "pillow>=10.0",
     "numpy>=1.24",
     "opencv-python-headless>=4.8",
+    # openai client is used by the listen/wake-word MCP tools for Whisper
+    # transcription. The separate voice_agent package adds Realtime on top.
+    "openai>=1.50",
 ]
 
 [project.optional-dependencies]
