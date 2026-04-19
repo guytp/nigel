@@ -364,7 +364,47 @@ class RealHardware:
             self._vilib.color_detect(color)
 
     def speak(self, text: str) -> None:
-        self._tts.say(text)
+        """Render `text` via pico2wave/espeak and play via PipeWire (paplay).
+
+        We bypass robot_hat.TTS().say() because that shells out to `aplay`
+        which hits ALSA's `default` PCM — and /etc/asound.conf from SunFounder
+        points `default` at the Robot HAT's on-board speaker (card 3). That
+        defeats any PipeWire-managed output device (e.g. a paired Bluetooth
+        speakerphone). Going pico2wave → paplay routes the audio via the
+        PulseAudio/PipeWire interface, which respects the default sink.
+
+        Falls back to robot_hat TTS if paplay isn't available.
+        """
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        if not text:
+            return
+        if not shutil.which("paplay") or not shutil.which("pico2wave"):
+            # degrade to the on-board speaker — better than silence
+            self._tts.say(text)
+            return
+        tmp = Path(tempfile.mkstemp(suffix=".wav")[1])
+        try:
+            subprocess.run(
+                ["pico2wave", "-l", "en-GB", "-w", str(tmp), text],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+            subprocess.run(
+                ["paplay", str(tmp)],
+                check=True,
+                capture_output=True,
+                timeout=max(10, int(len(text) * 0.15) + 5),
+            )
+        except Exception as e:
+            log.warning("paplay TTS failed (%s), falling back to on-board speaker", e)
+            self._tts.say(text)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     def stream_url(self) -> str:
         return f"http://{self._stream_host}:{self._stream_port}/mjpg"
