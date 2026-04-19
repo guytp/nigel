@@ -417,14 +417,29 @@ async def _run() -> int:
 
                 inbox_task = asyncio.create_task(poll_agent_inbox())
 
+                audio_delta_stats = {"count": 0, "bytes": 0, "last_log": 0.0}
+
                 try:
                     async for event in conn:
                         et = getattr(event, "type", None)
                         if et == "response.audio.delta":
-                            audio.enqueue_output(base64.b64decode(event.delta))
+                            decoded = base64.b64decode(event.delta)
+                            audio.enqueue_output(decoded)
                             # extend "bot speaking" window; pump_mic raises its
                             # gate threshold while we're inside it
                             bot_speaking_until["t"] = time.monotonic() + BOT_SPEAKING_WINDOW_S
+                            # Periodic telemetry so we can see output is flowing
+                            audio_delta_stats["count"] += 1
+                            audio_delta_stats["bytes"] += len(decoded)
+                            now = time.monotonic()
+                            if now - audio_delta_stats["last_log"] > 1.0:
+                                log.info(
+                                    "audio out: deltas=%d bytes=%d (last 1s+)",
+                                    audio_delta_stats["count"], audio_delta_stats["bytes"],
+                                )
+                                audio_delta_stats["count"] = 0
+                                audio_delta_stats["bytes"] = 0
+                                audio_delta_stats["last_log"] = now
                         elif et == "input_audio_buffer.speech_started":
                             log.info("→ OpenAI detected user speech_started")
                             audio.flush_output()  # barge-in — user's speech cleared the gate
