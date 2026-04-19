@@ -139,6 +139,20 @@ def listen(seconds: float = 5.0) -> dict:
     }
 
 
+def _wake_pattern(wake: str) -> re.Pattern:
+    """Build a regex that accepts any punctuation/whitespace between tokens.
+
+    "hey nigel" matches "hey nigel", "hey, nigel", "hey... nigel", "Hey Nigel"
+    (case-insensitive). Whisper loves injecting commas/periods around the name.
+    """
+    tokens = [t for t in re.split(r"\s+", wake.strip().lower()) if t]
+    if not tokens:
+        raise ValueError("wake phrase cannot be empty")
+    between = r"[\W_]+" if len(tokens) > 1 else ""
+    body = between.join(re.escape(t) for t in tokens)
+    return re.compile(rf"\b{body}\b", re.IGNORECASE)
+
+
 def listen_for_wake_word(
     wake: str = "hey nigel",
     timeout: float = 60.0,
@@ -150,7 +164,7 @@ def listen_for_wake_word(
     When the wake word is heard mid-chunk, we capture `capture_after` more
     seconds so we get whatever the user said after the wake word too.
     """
-    pattern = re.compile(rf"\b{re.escape(wake.lower())}\b", re.IGNORECASE)
+    pattern = _wake_pattern(wake)
     deadline = time.monotonic() + timeout
     heard: list[str] = []
 
