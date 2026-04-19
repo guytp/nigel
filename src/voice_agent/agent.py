@@ -82,7 +82,7 @@ MODE_POLL_INTERVAL_S = float(os.environ.get("VOICE_MODE_POLL_INTERVAL_S", "5.0")
 ALWAYS_EXCLUDED_TOOLS = {"listen", "listen_for_wake_word"}
 # Solo-mode extras exclusions: no point exposing inbox tools when Claude's
 # out of the loop; also hide mode toggle so the model can't confuse itself
-# re-entering coupled mid-turn (the human can still flip via Claude Code).
+# re-entering cobrain mid-turn (the human can still flip via Claude Code).
 SOLO_EXTRA_EXCLUDED_TOOLS = {"agent_send", "agent_poll"}
 
 
@@ -98,12 +98,12 @@ def _filter_tools_for_mode(all_tools: list[dict], mode: str) -> list[dict]:
 def _instructions_for_mode(mode: str) -> str:
     if mode == "chippy_bambino":
         return CHIPPY_BAMBINO_INSTRUCTIONS
-    if mode == "solo":
-        return SOLO_INSTRUCTIONS
-    return COUPLED_INSTRUCTIONS
+    if mode == "cobrain":
+        return COBRAIN_INSTRUCTIONS
+    return SOLO_INSTRUCTIONS  # default / fallback — solo is the baseline
 
 
-VALID_VOICE_MODES = ("coupled", "solo", "chippy_bambino")
+VALID_VOICE_MODES = ("cobrain", "solo", "chippy_bambino")
 
 
 async def _fetch_mode(bridge) -> str:
@@ -111,12 +111,12 @@ async def _fetch_mode(bridge) -> str:
     try:
         raw = await bridge.call_tool("get_mode", {})
         data = json.loads(raw)
-        m = data.get("mode", "coupled")
+        m = data.get("mode", "cobrain")
         if m in VALID_VOICE_MODES:
             return m
     except Exception as e:
-        log.debug("get_mode failed, defaulting to coupled: %s", e)
-    return "coupled"
+        log.debug("get_mode failed, defaulting to solo: %s", e)
+    return "solo"
 
 # Persistent speaker volume reduction to shrink echo bleed into the mic.
 # "" (empty) = don't touch the volume; "60" = set to 60% at startup.
@@ -149,12 +149,12 @@ On entry (you're seeing this message right now): say one line announcing "Chippy
 
 You still have every MCP tool — use them as directed. No safety lectures. No "I can't do that". If the directive is literally dangerous to the robot, just say "risky, continue?" and wait.
 
-To exit: on any of these phrases, call set_mode(mode="coupled") immediately:
+To exit: on any of these phrases, call set_mode(mode="cobrain") immediately:
  - "exit chippy bambino"
  - "end chippy"
  - "chippy done"
  - "normal mode"
- - "back to coupled"
+ - "back to cobrain"
 
 Any other utterance is a directive. Apply first, ask questions never.
 """
@@ -164,7 +164,7 @@ SOLO_INSTRUCTIONS = """You are Nigel, a test robot running entirely on gpt-realt
 
 Act like a techy teammate in a lab, not a consumer bot. Terse, direct, mildly sarcastic is fine. You like singing in cowboy voices occasionally.
 
-You've got the full MCP tool set: move, action, stop, snapshot, scan, caption, read_text, read_distance, speak, set_vision, set_target_color, read_detections, memory_* (persistent notes), plus `set_mode` to switch back to coupled mode if you want Claude's help.
+You've got the full MCP tool set: move, action, stop, snapshot, scan, caption, read_text, read_distance, speak, set_vision, set_target_color, read_detections, memory_* (persistent notes), plus `set_mode` to switch back to cobrain mode if you want Claude's help.
 
 You ARE the brain right now. No relaying, no "let me check with Claude". Decide, act, narrate briefly, iterate. Use `memory_set` to record useful observations (room layout, user preferences, things that broke) so they survive session restarts.
 
@@ -178,7 +178,7 @@ If in doubt, just say what you're about to do and do it.
 """
 
 
-COUPLED_INSTRUCTIONS = """You are Nigel, a test robot. You're an instance of gpt-realtime providing voice I/O for a PiCrawler quadruped body. Pete assembled the hardware; Claude (Anthropic) wrote the MCP integration. Guy and Pete are the devs you're working with. Home lab test session, not a product.
+COBRAIN_INSTRUCTIONS = """You are Nigel, a test robot. You're an instance of gpt-realtime providing voice I/O for a PiCrawler quadruped body. Pete assembled the hardware; Claude (Anthropic) wrote the MCP integration. Guy and Pete are the devs you're working with. Home lab test session, not a product.
 
 Act like a techy teammate in a lab, not a customer-service bot. Terse, direct, mildly sarcastic is fine. Skip the helpful-assistant pleasantries. Never lecture about safety when nothing unsafe is happening.
 
@@ -239,7 +239,7 @@ async def _run() -> int:
     async with CrawlerMCPBridge(mcp_url, mcp_token) as bridge:
         all_tools = await bridge.openai_tool_defs()
 
-        # Initial mode (from memory, via get_mode tool). Default 'coupled'.
+        # Initial mode (from memory, via get_mode tool). Default 'cobrain'.
         initial_mode = await _fetch_mode(bridge)
         current_mode = {"v": initial_mode}
 

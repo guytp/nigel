@@ -315,7 +315,7 @@ def memory_delete(key: str) -> dict:
 # ------------------------------------------------------------ mode toggle
 
 NIGEL_MODE_KEY = "nigel:mode"
-VALID_MODES = ("coupled", "solo", "chippy_bambino")
+VALID_MODES = ("cobrain", "solo", "chippy_bambino")
 
 
 @mcp.tool()
@@ -347,9 +347,10 @@ def set_mode(mode: str) -> dict:
 
 @mcp.tool()
 def get_mode() -> dict:
-    """Return Nigel's current mode: 'coupled' or 'solo'."""
+    """Return Nigel's current mode: 'solo', 'cobrain', or 'chippy_bambino'."""
     rec = memory.get(NIGEL_MODE_KEY)
-    return {"mode": rec["value"] if rec else "coupled"}
+    # New default: solo. Flip to cobrain when you want Claude in the loop.
+    return {"mode": rec["value"] if rec else "solo"}
 
 
 @mcp.tool()

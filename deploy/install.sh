@@ -123,3 +123,6 @@ fi
 echo
 echo "  MCP endpoint:  http://${IP}:8765/mcp"
 echo "  MJPEG stream:  http://${IP}:9000/mjpg"
+echo
+echo "  To pair a Bluetooth speakerphone + pick audio devices:"
+echo "    cd $REPO_DIR && ./deploy/audio-setup.sh"

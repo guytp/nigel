@@ -58,7 +58,8 @@ sudo apt-get update
 # set doesn't need any of the recommended extras anyway.
 sudo apt-get install -y --no-install-recommends \
   git python3 python3-pip python3-venv python3-opencv ffmpeg \
-  i2c-tools portaudio19-dev curl ca-certificates
+  i2c-tools portaudio19-dev curl ca-certificates \
+  bluez bluez-tools pulseaudio-utils pipewire-alsa sox alsa-utils
 
 # ---------------------------------------------------------------- sunfounder libs
 
@@ -150,6 +151,10 @@ cat <<EOF
     sudoedit /etc/picrawler-voice.env       # add OPENAI_API_KEY + MCP_TOKEN
     sudo chmod 600 /etc/picrawler-voice.env
     cd $REPO_DIR && ./deploy/install.sh
+
+  To pair a Bluetooth speakerphone + pick audio devices (recommended —
+  wired USB speakers bleed into the mic and Nigel hears himself):
+    cd $REPO_DIR && ./deploy/audio-setup.sh
 
   To uninstall:
     cd $REPO_DIR && ./deploy/uninstall.sh
