@@ -58,6 +58,8 @@ async def test_list_tools_returns_expected_set(mcp_server):
         "memory_list_keys",
         "memory_delete",
         "read_text",
+        "set_mode",
+        "get_mode",
     }
     async with streamablehttp_client(mcp_server["url"], headers=headers) as (r, w, _):
         async with ClientSession(r, w) as session:

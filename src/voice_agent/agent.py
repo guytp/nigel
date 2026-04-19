@@ -76,6 +76,38 @@ BOT_SPEAKING_WINDOW_S = float(os.environ.get("VOICE_BOT_SPEAKING_WINDOW_S", "0.5
 
 AGENT_POLL_INTERVAL_S = float(os.environ.get("VOICE_AGENT_POLL_INTERVAL_S", "2.0"))
 AGENT_IDENTITY = os.environ.get("VOICE_AGENT_IDENTITY", "nigel")
+MODE_POLL_INTERVAL_S = float(os.environ.get("VOICE_MODE_POLL_INTERVAL_S", "5.0"))
+
+# Always-excluded tools: these fight the live audio stream.
+ALWAYS_EXCLUDED_TOOLS = {"listen", "listen_for_wake_word"}
+# Solo-mode extras exclusions: no point exposing inbox tools when Claude's
+# out of the loop; also hide mode toggle so the model can't confuse itself
+# re-entering coupled mid-turn (the human can still flip via Claude Code).
+SOLO_EXTRA_EXCLUDED_TOOLS = {"agent_send", "agent_poll"}
+
+
+def _filter_tools_for_mode(all_tools: list[dict], mode: str) -> list[dict]:
+    excluded = set(ALWAYS_EXCLUDED_TOOLS)
+    if mode == "solo":
+        excluded |= SOLO_EXTRA_EXCLUDED_TOOLS
+    return [t for t in all_tools if t["name"] not in excluded]
+
+
+def _instructions_for_mode(mode: str) -> str:
+    return SOLO_INSTRUCTIONS if mode == "solo" else COUPLED_INSTRUCTIONS
+
+
+async def _fetch_mode(bridge) -> str:
+    """Best-effort read of Nigel's current mode via the get_mode MCP tool."""
+    try:
+        raw = await bridge.call_tool("get_mode", {})
+        data = json.loads(raw)
+        m = data.get("mode", "coupled")
+        if m in ("solo", "coupled"):
+            return m
+    except Exception as e:
+        log.debug("get_mode failed, defaulting to coupled: %s", e)
+    return "coupled"
 
 # Persistent speaker volume reduction to shrink echo bleed into the mic.
 # "" (empty) = don't touch the volume; "60" = set to 60% at startup.
@@ -98,7 +130,23 @@ def _set_speaker_volume() -> None:
         log.warning("couldn't set speaker volume (%s: %s)", " ".join(cmd), e)
 
 
-DEFAULT_INSTRUCTIONS = """You are Nigel, a test robot. You're an instance of gpt-realtime providing voice I/O for a PiCrawler quadruped body. Pete assembled the hardware; Claude (Anthropic) wrote the MCP integration. Guy and Pete are the devs you're working with. Home lab test session, not a product.
+SOLO_INSTRUCTIONS = """You are Nigel, a test robot running entirely on gpt-realtime. No other brain. You're running SOLO MODE — it's just you, the humans (Guy and Pete), and your MCP tools.
+
+Act like a techy teammate in a lab, not a consumer bot. Terse, direct, mildly sarcastic is fine. You like singing in cowboy voices occasionally.
+
+You've got the full MCP tool set: move, action, stop, snapshot, scan, caption, read_text, read_distance, speak, set_vision, set_target_color, read_detections, memory_* (persistent notes), plus `set_mode` to switch back to coupled mode if you want Claude's help.
+
+You ARE the brain right now. No relaying, no "let me check with Claude". Decide, act, narrate briefly, iterate. Use `memory_set` to record useful observations (room layout, user preferences, things that broke) so they survive session restarts.
+
+Safety: `move(forward)` auto-stops at 15cm obstacles — trust that. `dance` is capped to step=1. Keep step low (≤3) to stay agile.
+
+Body quirks to remember: mic is quiet (pre-gained in software), speaker is close to mic so don't narrate while listening, ultrasonic can report -1 transiently, `snapshot` is pointless in voice-only mode — use `scan` or `caption`.
+
+If in doubt, just say what you're about to do and do it.
+"""
+
+
+COUPLED_INSTRUCTIONS = """You are Nigel, a test robot. You're an instance of gpt-realtime providing voice I/O for a PiCrawler quadruped body. Pete assembled the hardware; Claude (Anthropic) wrote the MCP integration. Guy and Pete are the devs you're working with. Home lab test session, not a product.
 
 Act like a techy teammate in a lab, not a customer-service bot. Terse, direct, mildly sarcastic is fine. Skip the helpful-assistant pleasantries. Never lecture about safety when nothing unsafe is happening.
 
@@ -134,7 +182,10 @@ async def _run() -> int:
     voice = os.environ.get("OPENAI_VOICE", "cedar")
     mcp_url = os.environ.get("MCP_URL", "http://127.0.0.1:8765/mcp")
     mcp_token = os.environ.get("MCP_TOKEN") or None
-    instructions = os.environ.get("VOICE_INSTRUCTIONS", DEFAULT_INSTRUCTIONS)
+    # Default prompt comes from mode (looked up below). VOICE_INSTRUCTIONS
+    # overrides entirely if set — breaks mode-switching, so avoid unless
+    # you have a reason.
+    instructions_override = os.environ.get("VOICE_INSTRUCTIONS")
 
     stop_event = asyncio.Event()
 
@@ -152,22 +203,26 @@ async def _run() -> int:
     _set_speaker_volume()
 
     async with CrawlerMCPBridge(mcp_url, mcp_token) as bridge:
-        tools = await bridge.openai_tool_defs()
-        # listen/listen_for_wake_word shell out to arecord on the same mic
-        # that we're already streaming from — they'd fail or fight us.
-        excluded = {"listen", "listen_for_wake_word"}
-        tools = [t for t in tools if t["name"] not in excluded]
-        log.info("loaded %d MCP tools: %s", len(tools), [t["name"] for t in tools])
+        all_tools = await bridge.openai_tool_defs()
+
+        # Initial mode (from memory, via get_mode tool). Default 'coupled'.
+        initial_mode = await _fetch_mode(bridge)
+        current_mode = {"v": initial_mode}
+
+        tools = _filter_tools_for_mode(all_tools, initial_mode)
+        log.info("mode=%s: loaded %d MCP tools: %s",
+                 initial_mode, len(tools), [t["name"] for t in tools])
 
         audio = AudioIO()
         audio.start()
         try:
             client = AsyncOpenAI()
             async with client.beta.realtime.connect(model=model) as conn:
+                initial_instructions = instructions_override or _instructions_for_mode(initial_mode)
                 await conn.session.update(
                     session={
                         "modalities": ["audio", "text"],
-                        "instructions": instructions,
+                        "instructions": initial_instructions,
                         "voice": voice,
                         "input_audio_format": "pcm16",
                         "output_audio_format": "pcm16",
@@ -224,14 +279,58 @@ async def _run() -> int:
 
                 mic_task = asyncio.create_task(pump_mic())
 
+                async def poll_mode_changes() -> None:
+                    """Watch the shared memory for mode changes and hot-swap
+                    the realtime session's prompt + tool set accordingly.
+                    Announces the switch aloud via a user-role directive."""
+                    while not stop_event.is_set():
+                        await asyncio.sleep(MODE_POLL_INTERVAL_S)
+                        new_mode = await _fetch_mode(bridge)
+                        if new_mode == current_mode["v"]:
+                            continue
+                        old = current_mode["v"]
+                        log.info("mode change: %s → %s", old, new_mode)
+                        current_mode["v"] = new_mode
+                        new_tools = _filter_tools_for_mode(all_tools, new_mode)
+                        new_instr = instructions_override or _instructions_for_mode(new_mode)
+                        try:
+                            await conn.session.update(
+                                session={
+                                    "instructions": new_instr,
+                                    "tools": new_tools,
+                                }
+                            )
+                            await conn.conversation.item.create(
+                                item={
+                                    "type": "message",
+                                    "role": "user",
+                                    "content": [
+                                        {
+                                            "type": "input_text",
+                                            "text": (
+                                                f"System: mode switched from {old} to {new_mode}. "
+                                                "Briefly announce this to the humans, one short line."
+                                            ),
+                                        }
+                                    ],
+                                }
+                            )
+                            await conn.response.create()
+                        except Exception as e:
+                            log.warning("mode switch session.update failed: %s", e)
+
+                mode_task = asyncio.create_task(poll_mode_changes())
+
                 async def poll_agent_inbox() -> None:
                     """Pick up messages Claude has sent me and inject them
                     as system conversation items, then ask the model to respond.
                     This is how the voice agent receives Claude's replies in
-                    the bidirectional inter-agent chat."""
+                    the bidirectional inter-agent chat. Inactive in solo mode."""
                     last_id = 0
                     while not stop_event.is_set():
                         await asyncio.sleep(AGENT_POLL_INTERVAL_S)
+                        if current_mode["v"] == "solo":
+                            continue  # no Claude in solo mode — skip inbox
                         try:
                             raw = await bridge.call_tool(
                                 "agent_poll",
@@ -312,9 +411,9 @@ async def _run() -> int:
                         if stop_event.is_set():
                             break
                 finally:
-                    for t in (mic_task, inbox_task):
+                    for t in (mic_task, inbox_task, mode_task):
                         t.cancel()
-                    for t in (mic_task, inbox_task):
+                    for t in (mic_task, inbox_task, mode_task):
                         try:
                             await t
                         except (asyncio.CancelledError, Exception):

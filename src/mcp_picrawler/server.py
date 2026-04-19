@@ -45,7 +45,13 @@ mcp = FastMCP(
         "  3. `snapshot` — full image. Movement tools also auto-return a frame.\n\n"
         "The voice agent (OpenAI gpt-realtime, separate process) may be "
         "connected to the same MCP server — if a tool you didn't invoke runs, "
-        "that's the other brain. Guy and Pete can watch MJPEG at :9000."
+        "that's the other brain. Guy and Pete can watch MJPEG at :9000.\n\n"
+        "Nigel has a mode — check with `get_mode`. "
+        "In 'coupled' mode (default) you collaborate with the voice agent via "
+        "`agent_send` / `agent_poll`. In 'solo' mode the voice agent runs alone "
+        "and you must stay passive: don't send inbox messages, don't drive the "
+        "body, don't speak unless the human specifically asks you to do "
+        "something that clearly isn't addressed to Nigel."
     ),
 )
 
@@ -304,6 +310,41 @@ def memory_list_keys(limit: int = 100) -> list[str]:
 def memory_delete(key: str) -> dict:
     """Delete a memory by key. Returns {deleted: bool}."""
     return {"deleted": memory.delete(key)}
+
+
+# ------------------------------------------------------------ mode toggle
+
+NIGEL_MODE_KEY = "nigel:mode"
+VALID_MODES = ("coupled", "solo")
+
+
+@mcp.tool()
+def set_mode(mode: str) -> dict:
+    """Switch Nigel between 'coupled' and 'solo'.
+
+    - `coupled` (default): Claude (via Claude Code) and gpt-realtime (the
+      voice agent) are both active. They talk through the agent inbox.
+      Claude is the reasoner; gpt-realtime is the voice + fast reflexes.
+    - `solo`: only gpt-realtime drives. Inbox polling stops, agent_send /
+      agent_poll tools are hidden from the voice session, and Claude is
+      expected to stay silent unless the human addresses Claude directly.
+
+    The voice agent polls mode every ~5s and reconfigures its session
+    (prompt + tool list) on change — no restart needed. It announces the
+    mode switch aloud.
+    """
+    mode = (mode or "").strip().lower()
+    if mode not in VALID_MODES:
+        raise ValueError(f"mode must be one of {list(VALID_MODES)}")
+    memory.set(NIGEL_MODE_KEY, mode, tags=["system", "mode"], author="mcp")
+    return {"mode": mode}
+
+
+@mcp.tool()
+def get_mode() -> dict:
+    """Return Nigel's current mode: 'coupled' or 'solo'."""
+    rec = memory.get(NIGEL_MODE_KEY)
+    return {"mode": rec["value"] if rec else "coupled"}
 
 
 @mcp.tool()
