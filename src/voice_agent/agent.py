@@ -149,19 +149,39 @@ async def _run() -> int:
                 bot_speaking_until = {"t": 0.0}
 
                 async def pump_mic() -> None:
+                    last_log = 0.0
+                    rms_accum: list[float] = []
+                    sent_since_log = 0
+                    dropped_since_log = 0
                     while not stop_event.is_set():
                         pcm = await audio.read_chunk()
                         now = time.monotonic()
                         bot_speaking = now < bot_speaking_until["t"]
                         gate = BOT_SPEAKING_GATE_RMS if bot_speaking else NOISE_GATE_RMS
-                        if gate > 0 and rms_int16(pcm) < gate:
-                            continue
-                        b64 = base64.b64encode(pcm).decode("ascii")
-                        try:
-                            await conn.input_audio_buffer.append(audio=b64)
-                        except Exception as e:
-                            log.warning("mic send failed: %s", e)
-                            break
+                        rms = rms_int16(pcm)
+                        rms_accum.append(rms)
+                        if gate > 0 and rms < gate:
+                            dropped_since_log += 1
+                        else:
+                            sent_since_log += 1
+                            b64 = base64.b64encode(pcm).decode("ascii")
+                            try:
+                                await conn.input_audio_buffer.append(audio=b64)
+                            except Exception as e:
+                                log.warning("mic send failed: %s", e)
+                                break
+                        # periodic stats — every ~2s
+                        if now - last_log > 2.0 and rms_accum:
+                            avg = sum(rms_accum) / len(rms_accum)
+                            peak = max(rms_accum)
+                            log.info(
+                                "mic: sent=%d dropped=%d avg_rms=%.0f peak_rms=%.0f gate=%.0f bot_speaking=%s",
+                                sent_since_log, dropped_since_log, avg, peak, gate, bot_speaking,
+                            )
+                            last_log = now
+                            rms_accum.clear()
+                            sent_since_log = 0
+                            dropped_since_log = 0
 
                 mic_task = asyncio.create_task(pump_mic())
 
@@ -174,7 +194,14 @@ async def _run() -> int:
                             # gate threshold while we're inside it
                             bot_speaking_until["t"] = time.monotonic() + BOT_SPEAKING_WINDOW_S
                         elif et == "input_audio_buffer.speech_started":
+                            log.info("→ OpenAI detected user speech_started")
                             audio.flush_output()  # barge-in — user's speech cleared the gate
+                        elif et == "input_audio_buffer.speech_stopped":
+                            log.info("→ OpenAI detected user speech_stopped")
+                        elif et == "response.created":
+                            log.info("← response.created")
+                        elif et == "response.audio_transcript.delta":
+                            pass  # noisy, skip
                         elif et == "response.output_item.done":
                             item = getattr(event, "item", None)
                             if item is not None and getattr(item, "type", None) == "function_call":
